@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from time import sleep
 
+from drift.ai.client import LLMClient
+from drift.ai.mock_client import MockLLMClient
 from drift.config.models import AppConfig
 from drift.data.providers.yfinance_provider import YFinanceProvider
 from drift.features.engine import FeatureEngine
@@ -13,27 +15,46 @@ from drift.gates.regime_gate import RegimeGate
 from drift.gates.runner import GateRunner
 from drift.gates.session_gate import SessionGate
 from drift.models import MarketSnapshot, SignalEvent
-from drift.output.console import render_gate_blocked, render_gate_result, render_snapshot, render_startup, render_status, render_success
+from drift.output.console import (
+    render_gate_blocked,
+    render_gate_result,
+    render_llm_decision,
+    render_no_trade,
+    render_snapshot,
+    render_startup,
+    render_status,
+    render_success,
+    render_trade_plan,
+)
+from drift.planning.trade_plan_builder import TradePlanBuilder
 from drift.storage.logger import EventLogger
 
 
 class DriftApplication:
-    def __init__(self, config: AppConfig, config_path: str) -> None:
+    def __init__(self, config: AppConfig, config_path: str, dry_run: bool = False) -> None:
         self.config = config
         self.config_path = config_path
+        self._dry_run = dry_run
         self.event_logger = EventLogger(config.storage.jsonl_event_log)
         self._provider = YFinanceProvider()
         self._engine = FeatureEngine(config)
+
+        # In dry-run mode disable the session gate so signals flow through
+        # regardless of time of day.
+        sessions_cfg = config.sessions.model_copy(update={"enabled": False}) if dry_run else config.sessions
+
         self._gate_runner = GateRunner([
             KillSwitchGate(config.gates),
-            SessionGate(config.sessions),
+            SessionGate(sessions_cfg),
             CalendarGate(config.calendar),
             RegimeGate(config.gates),
             CooldownGate(config.gates, config.risk, config.storage.jsonl_event_log),
         ])
+        self._llm_client = MockLLMClient() if dry_run else LLMClient(config.llm)
+        self._plan_builder = TradePlanBuilder(config)
 
     def run_once(self) -> None:
-        render_startup(self.config, self.config_path)
+        render_startup(self.config, self.config_path, dry_run=self._dry_run)
 
         symbol = self.config.instrument.symbol
 
@@ -96,16 +117,70 @@ class DriftApplication:
         # ------------------------------------------------------------------
         # Log the cycle event (all gates passed)
         # ------------------------------------------------------------------
+
+        # ------------------------------------------------------------------
+        # LLM adjudication
+        # ------------------------------------------------------------------
+        render_status("calling LLM...")
+        decision, raw_dict, raw_text = self._llm_client.adjudicate(snapshot, gate_report)
+        render_llm_decision(decision)
+
+        if decision.decision == "NO_TRADE":
+            event = SignalEvent(
+                event_time=datetime.now(tz=timezone.utc),
+                symbol=symbol,
+                snapshot=snapshot.model_dump(mode="json"),
+                llm_decision_raw={"text": raw_text},
+                llm_decision_parsed=raw_dict,
+                pre_gate_report=gate_report.model_dump(mode="json"),
+                final_outcome="LLM_NO_TRADE",
+                final_reason=decision.thesis,
+            )
+            self.event_logger.append_event(event)
+            render_no_trade(decision, "LLM returned NO_TRADE.")
+            render_success(f"no-trade cycle logged to {self.config.storage.jsonl_event_log}")
+            return
+
+        # ------------------------------------------------------------------
+        # Trade plan construction (post-LLM deterministic gates)
+        # ------------------------------------------------------------------
+        render_status("building trade plan...")
+        plan = self._plan_builder.build(snapshot, decision)
+
+        if plan is None:
+            event = SignalEvent(
+                event_time=datetime.now(tz=timezone.utc),
+                symbol=symbol,
+                snapshot=snapshot.model_dump(mode="json"),
+                llm_decision_raw={"text": raw_text},
+                llm_decision_parsed=raw_dict,
+                pre_gate_report=gate_report.model_dump(mode="json"),
+                final_outcome="LLM_NO_TRADE",
+                final_reason="Trade plan builder rejected signal (stop/R:R/confidence constraint).",
+            )
+            self.event_logger.append_event(event)
+            render_no_trade(decision, "Signal rejected by trade plan constraints (stop/R:R/confidence).")
+            render_success(f"rejected cycle logged to {self.config.storage.jsonl_event_log}")
+            return
+
+        # ------------------------------------------------------------------
+        # Emit the trade plan
+        # ------------------------------------------------------------------
+        render_trade_plan(plan)
+
         event = SignalEvent(
             event_time=datetime.now(tz=timezone.utc),
             symbol=symbol,
             snapshot=snapshot.model_dump(mode="json"),
+            llm_decision_raw={"text": raw_text},
+            llm_decision_parsed=raw_dict,
             pre_gate_report=gate_report.model_dump(mode="json"),
-            final_outcome="SNAPSHOT_ONLY",
-            final_reason="All gates passed. LLM layer not yet wired.",
+            trade_plan=plan.model_dump(mode="json"),
+            final_outcome="TRADE_PLAN_ISSUED",
+            final_reason=f"{plan.bias} | {plan.setup_type} | confidence={plan.confidence}",
         )
         self.event_logger.append_event(event)
-        render_success(f"cycle logged to {self.config.storage.jsonl_event_log}")
+        render_success(f"trade plan logged to {self.config.storage.jsonl_event_log}")
 
     def run_forever(self) -> None:
         while True:

@@ -133,9 +133,9 @@ Version 1 should support:
 
 Use a slower discretionary-assist profile:
 
-- cycle every 60 seconds
-- use 1-minute and 5-minute bars as primary decision frames
-- use hourly bars only as context
+- cycle every 15 minutes (revised — see section 23.2)
+- use 15-minute and 1-hour bars as primary decision frames
+- use daily and 4H bars as trend context
 - avoid sub-second order book logic in version 1
 - avoid live reversal logic in version 1
 - avoid dynamic self-generated SL/TP in version 1 unless bounded by hard rules
@@ -255,6 +255,8 @@ A setup should never depend on the LLM to infer raw technical structure from mes
 ## 8.1 Role of the LLM
 
 The LLM should be used for **structured adjudication**, not unconstrained creativity.
+
+> **Implementation note:** Provider is Anthropic Claude (`claude-sonnet-4-6`). See section 23.1.
 
 Its job is to assess the precomputed market snapshot and return one of:
 
@@ -801,7 +803,50 @@ Track:
 
 ---
 
-# 23. Recommended Build Order
+# 23. Confirmed Technical Decisions (April 2026)
+
+The following decisions were made and locked in after the initial build phases were complete. They supersede earlier assumptions in sections above where they conflict.
+
+## 23.1 LLM provider and model
+
+- **Provider:** Anthropic Claude (replaces OpenAI assumption from earlier sections)
+- **Model:** `claude-sonnet-4-6`
+- **Rationale:** Structured adjudication on a pre-computed snapshot does not need Opus-level reasoning. Sonnet is ~5x faster and cheaper, which matters at 15-minute cadence. Low temperature + strict JSON schema enforces the quality ceiling the task needs.
+- **SDK:** `anthropic` Python package, structured output via tool-use or text + schema validation
+- **Config key:** `llm.provider: anthropic`, `llm.model: claude-sonnet-4-6`
+
+## 23.2 Poll cadence
+
+- **Changed from 60 seconds → 15 minutes**
+- Aligns with the shortest tracked timeframe (15M bars). Data does not meaningfully change within a 15M bar window, so sub-15M polling produces no new signal and wastes LLM calls.
+- 15-minute cadence = ~26 LLM calls per full RTH session day.
+
+## 23.3 Feature engineering additions (order blocks)
+
+The feature layer will be extended with ICT/smart-money concepts as additional `FeatureComputer` modules:
+
+- **Order blocks** (`features/order_blocks.py`): Detect candles that caused large price displacement (BOS/CHoCH zones). Mark the body range as a high-interest zone. Track whether price has returned to fill it.
+- **Rejection blocks** (`features/rejection_blocks.py`): Detect candles with significant wicks on both sides or heavy rejection from a level. These feed into the invalidation logic in the prompt.
+
+These are computed deterministically from OHLC using pure pandas and added to `MarketSnapshot` as zone lists. The LLM receives them as structured fields, not raw bar data.
+
+The original indicator set (EMAs, VWAP, RSI, ATR, MACD, volume) is retained in full.
+
+## 23.4 Stop First Win gate — deferred
+
+A daily P&L gate ("halt signals once session is green") is architecturally planned but not built in Phase 4. It requires trade outcome tracking. The gate stub is reserved in the gate layer for Phase 5+ once execution context exists.
+
+## 23.5 Auto-execution extensibility
+
+The system will include an `ExecutionAdapter` interface in `planning/` with:
+- `NullAdapter` — no-op (current behavior, always active in V1)
+- `NinjaTraderAdapter` stub — writes signal file to a watched directory
+
+This seam means integrating NinjaTrader or another broker later requires only implementing the adapter, not restructuring the signal pipeline.
+
+---
+
+# 24. Recommended Build Order
 
 ## Phase 1: Foundation
 

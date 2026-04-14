@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+
+from drift.config.models import AppConfig
+from drift.models import LLMDecision, MarketSnapshot, TradePlan
+from drift.planning.stop_engine import StopEngine
+from drift.planning.target_engine import TargetEngine
+
+logger = logging.getLogger(__name__)
+
+
+class TradePlanBuilder:
+    """Constructs a validated TradePlan from an LLMDecision and MarketSnapshot.
+
+    Returns None if any hard constraint is violated (bad stop, R:R too low,
+    confidence below threshold, direction not allowed).
+    """
+
+    def __init__(self, config: AppConfig) -> None:
+        self._cfg = config
+        strat = config.strategy
+        self._stop_engine = StopEngine(config.risk, structure_buffer=strat.structure_buffer_points)
+        self._target_engine = TargetEngine(config.risk)
+        self._chase_buffer = strat.chase_buffer_points
+
+    def build(
+        self,
+        snapshot: MarketSnapshot,
+        decision: LLMDecision,
+    ) -> TradePlan | None:
+        """Attempt to build a TradePlan.
+
+        Returns None (NO_TRADE) if any hard gate fails.
+        """
+        # Direction allowed?
+        if decision.decision == "LONG" and not self._cfg.instrument.allow_long:
+            logger.info("LONG decision rejected — allow_long is false")
+            return None
+        if decision.decision == "SHORT" and not self._cfg.instrument.allow_short:
+            logger.info("SHORT decision rejected — allow_short is false")
+            return None
+
+        # Confidence threshold
+        if decision.confidence < self._cfg.risk.min_confidence:
+            logger.info(
+                "Decision rejected — confidence %d < min %d",
+                decision.confidence,
+                self._cfg.risk.min_confidence,
+            )
+            return None
+
+        # Setup type allowed?
+        if decision.setup_type not in self._cfg.strategy.allowed_setup_types:
+            logger.info("Decision rejected — setup_type %r not in allowed list", decision.setup_type)
+            return None
+
+        # ATR for stop calculation (fall back to 10 pts if missing from snapshot)
+        atr = self._resolve_atr(snapshot)
+
+        # Stop loss
+        stop_loss = self._stop_engine.calculate(snapshot, decision, atr)
+        if stop_loss is None:
+            logger.info("Decision rejected — stop engine could not produce a valid stop")
+            return None
+
+        # Targets + R:R
+        tp1, tp2, rr = self._target_engine.calculate(decision, stop_loss)
+
+        if rr < self._cfg.risk.min_reward_risk:
+            logger.info("Decision rejected — R:R %.2f < min %.2f", rr, self._cfg.risk.min_reward_risk)
+            return None
+
+        # Chase level — how far beyond entry_max (long) or entry_min (short) the
+        # operator should not chase
+        if decision.decision == "LONG":
+            chase = round(decision.entry_zone[1] + self._chase_buffer, 2)
+        else:
+            chase = round(decision.entry_zone[0] - self._chase_buffer, 2)
+
+        operator_instructions = self._build_instructions(decision, stop_loss, tp1, chase)
+
+        return TradePlan(
+            generated_at=datetime.now(tz=timezone.utc),
+            symbol=snapshot.symbol,
+            bias=decision.decision,  # type: ignore[arg-type]
+            setup_type=decision.setup_type,
+            confidence=decision.confidence,
+            entry_min=decision.entry_zone[0],
+            entry_max=decision.entry_zone[1],
+            stop_loss=stop_loss,
+            take_profit_1=tp1,
+            take_profit_2=tp2,
+            reward_risk_ratio=rr,
+            max_hold_minutes=decision.hold_minutes or self._cfg.risk.max_hold_minutes_default,
+            thesis=decision.thesis,
+            invalidation_conditions=[decision.invalidation_hint],
+            operator_instructions=operator_instructions,
+            do_not_trade_if=decision.do_not_trade_if,
+            chase_above_below=chase,
+        )
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_atr(self, snapshot: MarketSnapshot) -> float:
+        """Pull ATR from snapshot market_note context or fall back to a safe default."""
+        # ATR isn't directly on the snapshot model yet; use a default.
+        # Future: add atr field to MarketSnapshot.
+        return 10.0
+
+    def _build_instructions(
+        self,
+        decision: LLMDecision,
+        stop_loss: float,
+        tp1: float,
+        chase_level: float,
+    ) -> list[str]:
+        direction = decision.decision
+        entry_low, entry_high = decision.entry_zone
+
+        if direction == "LONG":
+            return [
+                f"Wait for price to pull back into the entry zone ({entry_low:.2f} – {entry_high:.2f}).",
+                f"Do not enter if price is above {chase_level:.2f} before you are in.",
+                f"Place stop immediately at {stop_loss:.2f} upon entry.",
+                f"First target: {tp1:.2f}. Consider exiting fully at TP1 for a safe first win.",
+                f"Exit the entire position if price closes below the invalidation level.",
+                f"Time stop: exit trade after {decision.hold_minutes} minutes if not resolved.",
+            ]
+        else:
+            return [
+                f"Wait for price to rally back into the entry zone ({entry_low:.2f} – {entry_high:.2f}).",
+                f"Do not enter if price is below {chase_level:.2f} before you are in.",
+                f"Place stop immediately at {stop_loss:.2f} upon entry.",
+                f"First target: {tp1:.2f}. Consider exiting fully at TP1 for a safe first win.",
+                f"Exit the entire position if price closes above the invalidation level.",
+                f"Time stop: exit trade after {decision.hold_minutes} minutes if not resolved.",
+            ]
