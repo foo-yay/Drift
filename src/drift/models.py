@@ -6,6 +6,26 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 
+class CalendarEvent(BaseModel):
+    """A scheduled economic event that may affect trading conditions."""
+
+    title: str
+    country: str
+    event_time: datetime
+    impact: Literal["High", "Medium", "Low", "Holiday"]
+    forecast: str | None = None
+    previous: str | None = None
+
+    @property
+    def is_high_impact(self) -> bool:
+        return self.impact == "High"
+
+    def minutes_until(self, now: datetime) -> float:
+        """Signed minutes until this event from `now` (negative = already passed)."""
+        delta = self.event_time - now
+        return delta.total_seconds() / 60
+
+
 class Bar(BaseModel):
     timestamp: datetime
     open: float

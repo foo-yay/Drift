@@ -6,7 +6,7 @@ from rich.table import Table
 from rich import box as rich_box
 
 from drift.config.models import AppConfig
-from drift.models import MarketSnapshot
+from drift.models import GateResult, MarketSnapshot
 
 console = Console()
 
@@ -119,5 +119,26 @@ def render_snapshot(snapshot: MarketSnapshot) -> None:
     console.print(Panel(outer, title=f"[bold]MarketSnapshot — {snapshot.symbol}[/bold]", expand=False))
     if note_panel:
         console.print(note_panel)
+
+
+def render_gate_result(result: GateResult) -> None:
+    """Render a single gate evaluation result."""
+    if result.passed:
+        icon = "[bold green]PASS[/bold green]"
+    else:
+        icon = "[bold red]BLOCK[/bold red]"
+    console.print(f"  Gate [{result.gate_name}] {icon} — {result.reason}")
+
+
+def render_gate_blocked(result: GateResult) -> None:
+    """Render a full blocking panel when a gate vetoes the signal."""
+    console.print(
+        Panel(
+            f"[bold red]{result.reason}[/bold red]",
+            title=f"[bold red]Signal Blocked — {result.gate_name} gate[/bold red]",
+            border_style="red",
+            expand=False,
+        )
+    )
 
 

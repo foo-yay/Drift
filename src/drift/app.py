@@ -6,8 +6,9 @@ from time import sleep
 from drift.config.models import AppConfig
 from drift.data.providers.yfinance_provider import YFinanceProvider
 from drift.features.engine import FeatureEngine
+from drift.gates.calendar_gate import CalendarGate
 from drift.models import MarketSnapshot, SignalEvent
-from drift.output.console import render_snapshot, render_startup, render_status, render_success
+from drift.output.console import render_gate_blocked, render_gate_result, render_snapshot, render_startup, render_status, render_success
 from drift.storage.logger import EventLogger
 
 
@@ -18,6 +19,7 @@ class DriftApplication:
         self.event_logger = EventLogger(config.storage.jsonl_event_log)
         self._provider = YFinanceProvider()
         self._engine = FeatureEngine(config)
+        self._calendar_gate = CalendarGate(config.calendar)
 
     def run_once(self) -> None:
         render_startup(self.config, self.config_path)
@@ -58,14 +60,34 @@ class DriftApplication:
         render_snapshot(snapshot)
 
         # ------------------------------------------------------------------
-        # Log the cycle event
+        # Gate layer
+        # ------------------------------------------------------------------
+        render_status("evaluating gates...")
+        calendar_result = self._calendar_gate.evaluate(snapshot)
+        render_gate_result(calendar_result)
+
+        if not calendar_result.passed:
+            render_gate_blocked(calendar_result)
+            event = SignalEvent(
+                event_time=datetime.now(tz=timezone.utc),
+                symbol=symbol,
+                snapshot=snapshot.model_dump(mode="json"),
+                final_outcome="BLOCKED",
+                final_reason=calendar_result.reason,
+            )
+            self.event_logger.append_event(event)
+            render_success(f"blocked cycle logged to {self.config.storage.jsonl_event_log}")
+            return
+
+        # ------------------------------------------------------------------
+        # Log the cycle event (all gates passed)
         # ------------------------------------------------------------------
         event = SignalEvent(
             event_time=datetime.now(tz=timezone.utc),
             symbol=symbol,
             snapshot=snapshot.model_dump(mode="json"),
             final_outcome="SNAPSHOT_ONLY",
-            final_reason="Feature engine cycle complete. Gate and LLM layers not yet wired.",
+            final_reason="Gates passed. LLM layer not yet wired.",
         )
         self.event_logger.append_event(event)
         render_success(f"cycle logged to {self.config.storage.jsonl_event_log}")
