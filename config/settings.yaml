@@ -85,6 +85,6 @@ storage:
 
 output:
   console: true
-  desktop_notifications: false
+  desktop_notifications: true
   streamlit_dashboard: false
 

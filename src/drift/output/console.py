@@ -101,6 +101,8 @@ def render_snapshot(snapshot: MarketSnapshot) -> None:
         "Bars (1m / 5m / 1h)",
         f"{snapshot.bars_1m_count} / {snapshot.bars_5m_count} / {snapshot.bars_1h_count}",
     )
+    if snapshot.atr is not None:
+        context.add_row("ATR (14)", f"{snapshot.atr:.2f} pts")
     context.add_row("As Of", snapshot.as_of.strftime("%H:%M:%S UTC"))
 
     if snapshot.market_note:

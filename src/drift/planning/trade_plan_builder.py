@@ -120,22 +120,18 @@ class TradePlanBuilder:
     ) -> list[str]:
         direction = decision.decision
         entry_low, entry_high = decision.entry_zone
+        action = "BUY" if direction == "LONG" else "SELL"
+        close_action = "SELL" if direction == "LONG" else "BUY"
+        price_dir = "drops into" if direction == "LONG" else "rallies into"
+        chase_warn = f"above {chase_level:.2f}" if direction == "LONG" else f"below {chase_level:.2f}"
 
-        if direction == "LONG":
-            return [
-                f"Wait for price to pull back into the entry zone ({entry_low:.2f} – {entry_high:.2f}).",
-                f"Do not enter if price is above {chase_level:.2f} before you are in.",
-                f"Place stop immediately at {stop_loss:.2f} upon entry.",
-                f"First target: {tp1:.2f}. Consider exiting fully at TP1 for a safe first win.",
-                f"Exit the entire position if price closes below the invalidation level.",
-                f"Time stop: exit trade after {decision.hold_minutes} minutes if not resolved.",
-            ]
-        else:
-            return [
-                f"Wait for price to rally back into the entry zone ({entry_low:.2f} – {entry_high:.2f}).",
-                f"Do not enter if price is below {chase_level:.2f} before you are in.",
-                f"Place stop immediately at {stop_loss:.2f} upon entry.",
-                f"First target: {tp1:.2f}. Consider exiting fully at TP1 for a safe first win.",
-                f"Exit the entire position if price closes above the invalidation level.",
-                f"Time stop: exit trade after {decision.hold_minutes} minutes if not resolved.",
-            ]
+        return [
+            f"Open Robinhood → tap the search bar → type 'MNQ' → select 'MNQ1! Micro E-Mini Nasdaq'.",
+            f"Tap [{action}] and set order type to 'Limit'.",
+            f"Wait for price to {price_dir} the entry zone: {entry_low:.2f} – {entry_high:.2f}.",
+            f"If price is already {chase_warn} before you get in — skip this trade, do not chase.",
+            f"Set your limit price anywhere inside {entry_low:.2f} – {entry_high:.2f} and submit for 1 contract.",
+            f"Immediately after fill: set a Stop Loss order at {stop_loss:.2f}.",
+            f"Set a Take Profit (limit) order at {tp1:.2f}.",
+            f"Time stop: if neither target nor stop is hit within {decision.hold_minutes} min, tap [{close_action}] to close manually.",
+        ]
