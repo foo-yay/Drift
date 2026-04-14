@@ -99,11 +99,13 @@ class TestStopEngine:
         assert stop is not None
         assert stop > 19516.0
 
-    def test_returns_none_when_stop_too_tight(self):
-        # Set atr_stop_floor_mult very small so stop is < min_stop_points
+    def test_clamps_to_min_when_stop_too_tight(self):
+        # ATR-based stop will be < min_stop_points; engine should widen to exactly min
         eng = StopEngine(_risk_config(atr_stop_floor_mult=0.01, min_stop_points=6.0))
         stop = eng.calculate(_snapshot(), _long_decision(), atr=1.0)
-        assert stop is None
+        assert stop is not None
+        entry_min = _long_decision().entry_zone[0]
+        assert abs(entry_min - stop) == pytest.approx(6.0, abs=0.01)
 
     def test_returns_none_when_stop_too_wide(self):
         eng = StopEngine(_risk_config(max_stop_points=5.0, min_stop_points=1.0))
