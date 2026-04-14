@@ -191,12 +191,21 @@ def replay(
     """
     from datetime import date, timedelta
 
+    from drift.ai.client import LLMClient
+    from drift.ai.mock_client import MockLLMClient
     from drift.output.console import render_replay_summary
     from drift.replay.engine import ReplayEngine
     from drift.replay.loader import fetch_bars_for_date_range, load_bars_from_csv
 
     config = load_app_config(config_path)
     symbol = config.instrument.symbol
+
+    import os
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    llm_client = LLMClient(config) if api_key else MockLLMClient()
+    if not api_key:
+        from drift.output.console import console
+        console.print("[yellow]No ANTHROPIC_API_KEY found — using mock LLM. Signals are not real.[/yellow]")
 
     # ------------------------------------------------------------------
     # Load bars
@@ -254,6 +263,7 @@ def replay(
         bars_1m=bars_1m,
         bars_5m=bars_5m,
         bars_1h=bars_1h,
+        llm_client=llm_client,
         step_every_n_bars=step,
         disable_session_gate=disable_session_gate,
         verbose=verbose,
