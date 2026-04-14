@@ -18,6 +18,7 @@ from pathlib import Path
 
 import yfinance as yf
 
+from drift.data.providers.yfinance_provider import _resolve_ticker
 from drift.models import Bar
 
 
@@ -127,7 +128,7 @@ def fetch_bars_for_date_range(
         yfinance 1m data is only available for the last 7 days.
         For older dates use ``load_bars_from_csv`` with pre-downloaded data.
     """
-    ticker = yf.Ticker(symbol)
+    ticker = yf.Ticker(_resolve_ticker(symbol))
 
     start_str = str(start)
     end_str = str(end)
@@ -141,8 +142,9 @@ def fetch_bars_for_date_range(
     bars_1h = _yf_to_bars(df_1h, "1h", symbol)
 
     if not bars_1m:
+        resolved = _resolve_ticker(symbol)
         raise ValueError(
-            f"No 1m bars returned for {symbol} ({start_str} → {end_str}). "
+            f"No 1m bars returned for {symbol} (resolved to {resolved!r}, {start_str} → {end_str}). "
             "yfinance only provides 1m data for the last 7 days."
         )
 
