@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from time import sleep
 
 from drift.ai.client import LLMClient
+from drift.ai.mock_client import MockLLMClient
 from drift.config.models import AppConfig
 from drift.data.providers.yfinance_provider import YFinanceProvider
 from drift.features.engine import FeatureEngine
@@ -30,24 +31,30 @@ from drift.storage.logger import EventLogger
 
 
 class DriftApplication:
-    def __init__(self, config: AppConfig, config_path: str) -> None:
+    def __init__(self, config: AppConfig, config_path: str, dry_run: bool = False) -> None:
         self.config = config
         self.config_path = config_path
+        self._dry_run = dry_run
         self.event_logger = EventLogger(config.storage.jsonl_event_log)
         self._provider = YFinanceProvider()
         self._engine = FeatureEngine(config)
+
+        # In dry-run mode disable the session gate so signals flow through
+        # regardless of time of day.
+        sessions_cfg = config.sessions.model_copy(update={"enabled": False}) if dry_run else config.sessions
+
         self._gate_runner = GateRunner([
             KillSwitchGate(config.gates),
-            SessionGate(config.sessions),
+            SessionGate(sessions_cfg),
             CalendarGate(config.calendar),
             RegimeGate(config.gates),
             CooldownGate(config.gates, config.risk, config.storage.jsonl_event_log),
         ])
-        self._llm_client = LLMClient(config.llm)
+        self._llm_client = MockLLMClient() if dry_run else LLMClient(config.llm)
         self._plan_builder = TradePlanBuilder(config)
 
     def run_once(self) -> None:
-        render_startup(self.config, self.config_path)
+        render_startup(self.config, self.config_path, dry_run=self._dry_run)
 
         symbol = self.config.instrument.symbol
 

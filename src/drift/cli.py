@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
+from dotenv import load_dotenv
+
+load_dotenv()  # loads .env from cwd (or parent dirs) into os.environ
 
 from drift.app import DriftApplication
 from drift.output.console import console, render_success
@@ -30,10 +33,14 @@ def run(
         bool,
         typer.Option("--once/--loop", help="Run a single cycle or continue looping."),
     ] = True,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Bypass session gate and use mock LLM. Test outside market hours without spending API credits."),
+    ] = False,
 ) -> None:
     config = load_app_config(config_path)
-    application = DriftApplication(config=config, config_path=config_path)
-    if once:
+    application = DriftApplication(config=config, config_path=config_path, dry_run=dry_run)
+    if dry_run or once:
         application.run_once()
         return
     application.run_forever()
