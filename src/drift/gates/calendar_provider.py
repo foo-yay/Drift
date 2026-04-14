@@ -1,45 +1,31 @@
 from __future__ import annotations
 
 import json
+import ssl
 import urllib.request
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
+
+import certifi
 
 from drift.models import CalendarEvent
 
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+
 _FEED_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
-_ET = ZoneInfo("America/New_York")
-
-# ForexFactory date/time parsing
-# Date: "Apr 10, 2026"   Time: "8:30am" | "All Day" | "Tentative"
-_DATE_FMT = "%b %d, %Y"
 
 
-def _parse_event_time(date_str: str, time_str: str) -> datetime | None:
-    """Parse ForexFactory date + time strings into an aware UTC datetime.
+def _parse_event_time(date_str: str) -> datetime | None:
+    """Parse the ForexFactory ISO 8601 date field into an aware UTC datetime.
 
-    Returns None for all-day or tentative events (no specific time given).
+    The feed uses full datetimes like ``"2026-04-14T08:30:00-04:00"``.
+    Returns None if the string is missing or unparseable.
     """
-    time_lower = time_str.strip().lower()
-    if time_lower in ("all day", "tentative", ""):
+    if not date_str:
         return None
-
     try:
-        date_part = datetime.strptime(date_str.strip(), _DATE_FMT).date()
-    except ValueError:
+        return datetime.fromisoformat(date_str).astimezone(timezone.utc)
+    except (ValueError, TypeError):
         return None
-
-    # Normalise formats: "8:30am" → "8:30 AM", "12:00pm" → "12:00 PM"
-    normalised = time_lower.replace("am", " AM").replace("pm", " PM")
-    for fmt in ("%I:%M %p", "%I %p"):
-        try:
-            time_part = datetime.strptime(normalised.strip(), fmt).time()
-            dt_et = datetime.combine(date_part, time_part, tzinfo=_ET)
-            return dt_et.astimezone(timezone.utc)
-        except ValueError:
-            continue
-
-    return None
 
 
 def _map_impact(raw: str) -> str:
@@ -73,12 +59,12 @@ class ForexFactoryCalendarProvider:
                 _FEED_URL,
                 headers={"User-Agent": "Drift/1.0 (economic calendar gate; contact via GitHub)"},
             )
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with urllib.request.urlopen(req, timeout=8, context=_SSL_CONTEXT) as resp:
                 raw: list[dict] = json.loads(resp.read().decode("utf-8"))
 
             events: list[CalendarEvent] = []
             for item in raw:
-                dt = _parse_event_time(item.get("date", ""), item.get("time", ""))
+                dt = _parse_event_time(item.get("date", ""))
                 if dt is None:
                     continue
                 events.append(
