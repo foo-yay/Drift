@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from drift.config.models import AppConfig
 from drift.features.momentum import MomentumFeatures
@@ -101,7 +101,7 @@ class FeatureEngine:
         )
 
         return MarketSnapshot(
-            as_of=datetime.now(tz=timezone.utc),
+            as_of=bars_1m[-1].timestamp,
             symbol=self._config.instrument.symbol,
             last_price=last_price,
             session=session,
