@@ -1,0 +1,74 @@
+app:
+  name: Drift
+  timezone: America/New_York
+  loop_interval_seconds: 60
+  mode: dry-run
+  log_level: INFO
+
+instrument:
+  symbol: MNQ
+  allow_long: true
+  allow_short: true
+
+sessions:
+  enabled: true
+  blocks:
+    - start: "09:40"
+      end: "11:30"
+    - start: "13:30"
+      end: "15:30"
+  skip_first_n_minutes_after_open: 10
+
+lookbacks:
+  bars_1m: 180
+  bars_5m: 120
+  bars_1h: 72
+
+features:
+  ema_periods: [9, 21, 50]
+  rsi_period: 14
+  atr_period: 14
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  volume_spike_window: 20
+
+risk:
+  min_confidence: 65
+  min_reward_risk: 1.8
+  max_signals_per_day: 3
+  cooldown_minutes: 15
+  max_stop_points: 30.0
+  min_stop_points: 6.0
+  atr_stop_floor_mult: 0.8
+  atr_target_mult: 1.8
+  max_hold_minutes_default: 25
+  no_trade_during_high_impact_events: false
+
+strategy:
+  allowed_setup_types:
+    - pullback_continuation
+    - breakout_continuation
+    - failed_breakout_reversion
+  extension_atr_threshold: 1.2
+  chase_buffer_points: 4.0
+  structure_buffer_points: 2.0
+
+llm:
+  provider: openai
+  model: gpt-5.4
+  temperature: 0.1
+  timeout_seconds: 20
+  max_retries: 2
+
+storage:
+  use_sqlite: true
+  sqlite_path: data/local.db
+  jsonl_event_log: logs/events.jsonl
+  csv_signal_log: logs/signals.csv
+
+output:
+  console: true
+  desktop_notifications: false
+  streamlit_dashboard: false
+
