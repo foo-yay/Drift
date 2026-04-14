@@ -13,7 +13,7 @@ model instances so the rest of the pipeline is provider-agnostic.
 from __future__ import annotations
 
 import csv
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import yfinance as yf
@@ -130,8 +130,13 @@ def fetch_bars_for_date_range(
     """
     ticker = yf.Ticker(_resolve_ticker(symbol))
 
+    # yfinance end date is exclusive, so add one day to include the requested end date.
+    if isinstance(start, str):
+        start = date.fromisoformat(start)
+    if isinstance(end, str):
+        end = date.fromisoformat(end)
     start_str = str(start)
-    end_str = str(end)
+    end_str = str(end + timedelta(days=1))
 
     df_1m = ticker.history(interval="1m", start=start_str, end=end_str, auto_adjust=True)
     df_5m = ticker.history(interval="5m", start=start_str, end=end_str, auto_adjust=True)
