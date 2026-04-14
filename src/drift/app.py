@@ -7,6 +7,11 @@ from drift.config.models import AppConfig
 from drift.data.providers.yfinance_provider import YFinanceProvider
 from drift.features.engine import FeatureEngine
 from drift.gates.calendar_gate import CalendarGate
+from drift.gates.cooldown_gate import CooldownGate
+from drift.gates.kill_switch_gate import KillSwitchGate
+from drift.gates.regime_gate import RegimeGate
+from drift.gates.runner import GateRunner
+from drift.gates.session_gate import SessionGate
 from drift.models import MarketSnapshot, SignalEvent
 from drift.output.console import render_gate_blocked, render_gate_result, render_snapshot, render_startup, render_status, render_success
 from drift.storage.logger import EventLogger
@@ -19,7 +24,13 @@ class DriftApplication:
         self.event_logger = EventLogger(config.storage.jsonl_event_log)
         self._provider = YFinanceProvider()
         self._engine = FeatureEngine(config)
-        self._calendar_gate = CalendarGate(config.calendar)
+        self._gate_runner = GateRunner([
+            KillSwitchGate(config.gates),
+            SessionGate(config.sessions),
+            CalendarGate(config.calendar),
+            RegimeGate(config.gates),
+            CooldownGate(config.gates, config.risk, config.storage.jsonl_event_log),
+        ])
 
     def run_once(self) -> None:
         render_startup(self.config, self.config_path)
@@ -63,17 +74,20 @@ class DriftApplication:
         # Gate layer
         # ------------------------------------------------------------------
         render_status("evaluating gates...")
-        calendar_result = self._calendar_gate.evaluate(snapshot)
-        render_gate_result(calendar_result)
+        gate_report = self._gate_runner.run(snapshot)
+        for result in gate_report.results:
+            render_gate_result(result)
 
-        if not calendar_result.passed:
-            render_gate_blocked(calendar_result)
+        if not gate_report.all_passed:
+            blocker = next(r for r in gate_report.results if not r.passed)
+            render_gate_blocked(blocker)
             event = SignalEvent(
                 event_time=datetime.now(tz=timezone.utc),
                 symbol=symbol,
                 snapshot=snapshot.model_dump(mode="json"),
+                pre_gate_report=gate_report.model_dump(mode="json"),
                 final_outcome="BLOCKED",
-                final_reason=calendar_result.reason,
+                final_reason=blocker.reason,
             )
             self.event_logger.append_event(event)
             render_success(f"blocked cycle logged to {self.config.storage.jsonl_event_log}")
@@ -86,8 +100,9 @@ class DriftApplication:
             event_time=datetime.now(tz=timezone.utc),
             symbol=symbol,
             snapshot=snapshot.model_dump(mode="json"),
+            pre_gate_report=gate_report.model_dump(mode="json"),
             final_outcome="SNAPSHOT_ONLY",
-            final_reason="Gates passed. LLM layer not yet wired.",
+            final_reason="All gates passed. LLM layer not yet wired.",
         )
         self.event_logger.append_event(event)
         render_success(f"cycle logged to {self.config.storage.jsonl_event_log}")
