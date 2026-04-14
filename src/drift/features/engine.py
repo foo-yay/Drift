@@ -123,6 +123,7 @@ class FeatureEngine:
             volatility_regime=volatility_regime,
             order_blocks=order_block_data.get("order_blocks", []),
             rejection_blocks=rejection_block_data.get("rejection_blocks", []),
+            atr=volatility.get("atr"),
             market_note=market_note,
         )
 

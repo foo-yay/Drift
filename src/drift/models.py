@@ -68,6 +68,7 @@ class MarketSnapshot(BaseModel):
     volatility_regime: str
     order_blocks: list[dict] = Field(default_factory=list)
     rejection_blocks: list[dict] = Field(default_factory=list)
+    atr: float | None = None
     market_note: str | None = None
 
 

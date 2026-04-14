@@ -32,7 +32,7 @@ features:
   volume_spike_window: 20
 
 risk:
-  min_confidence: 65
+  min_confidence: 60
   min_reward_risk: 1.8
   max_signals_per_day: 3
   cooldown_minutes: 15
