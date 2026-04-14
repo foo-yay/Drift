@@ -176,10 +176,11 @@ class ReplayEngine:
         symbol = self._config.instrument.symbol
         ts = self._provider.current_timestamp
 
-        render_status(
-            f"[replay] {ts.strftime('%Y-%m-%d %H:%M')} UTC  "
-            f"(step {self._provider.cursor + 1}/{self._provider.total_steps})"
-        )
+        if self._verbose:
+            render_status(
+                f"[replay] {ts.strftime('%Y-%m-%d %H:%M')} UTC  "
+                f"(step {self._provider.cursor + 1}/{self._provider.total_steps})"
+            )
 
         # Fetch data via the replay provider (no network call)
         try:
@@ -206,12 +207,20 @@ class ReplayEngine:
 
         # Gate layer
         gate_report = self._gate_runner.run(snapshot)
-        for result in gate_report.results:
-            render_gate_result(result)
+        if self._verbose:
+            for result in gate_report.results:
+                render_gate_result(result)
 
         if not gate_report.all_passed:
             blocker = next(r for r in gate_report.results if not r.passed)
-            render_gate_blocked(blocker)
+            if self._verbose:
+                render_gate_blocked(blocker)
+            else:
+                from drift.output.console import console
+                console.print(
+                    f"[dim][replay] {ts.strftime('%Y-%m-%d %H:%M')} — "
+                    f"BLOCKED: {blocker.reason}[/dim]"
+                )
             event = SignalEvent(
                 event_time=ts,
                 symbol=symbol,
@@ -224,8 +233,12 @@ class ReplayEngine:
             return event
 
         # LLM adjudication
+        render_status(
+            f"[replay] {ts.strftime('%Y-%m-%d %H:%M')} UTC — gates passed, calling LLM..."
+        )
         decision, raw_dict, raw_text = self._llm_client.adjudicate(snapshot, gate_report)
-        render_llm_decision(decision)
+        if self._verbose:
+            render_llm_decision(decision)
 
         if decision.decision == "NO_TRADE":
             event = SignalEvent(
@@ -239,7 +252,13 @@ class ReplayEngine:
                 final_reason=decision.thesis,
             )
             self._event_logger.append_event(event)
-            render_no_trade(decision, "LLM returned NO_TRADE.")
+            if self._verbose:
+                render_no_trade(decision, "LLM returned NO_TRADE.")
+            else:
+                from drift.output.console import console
+                console.print(
+                    f"[dim][replay] {ts.strftime('%Y-%m-%d %H:%M')} — LLM NO_TRADE[/dim]"
+                )
             return event
 
         # Trade plan construction
