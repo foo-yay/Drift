@@ -41,15 +41,17 @@ class DriftApplication:
         self._engine = FeatureEngine(config)
 
         # In dry-run mode disable the session gate so signals flow through
-        # regardless of time of day.
+        # regardless of time of day, and disable the cooldown gate so repeated
+        # test runs aren't blocked by prior signal history.
         sessions_cfg = config.sessions.model_copy(update={"enabled": False}) if dry_run else config.sessions
+        cooldown_cfg = config.gates.model_copy(update={"cooldown_enabled": False}) if dry_run else config.gates
 
         self._gate_runner = GateRunner([
             KillSwitchGate(config.gates),
             SessionGate(sessions_cfg),
             CalendarGate(config.calendar),
             RegimeGate(config.gates),
-            CooldownGate(config.gates, config.risk, config.storage.jsonl_event_log),
+            CooldownGate(cooldown_cfg, config.risk, config.storage.jsonl_event_log),
         ])
         self._llm_client = MockLLMClient() if dry_run else LLMClient(config.llm)
         self._plan_builder = TradePlanBuilder(config)
