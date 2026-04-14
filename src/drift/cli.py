@@ -207,7 +207,7 @@ def replay(
         llm_client = MockLLMClient()
         console.print("[yellow]DRY RUN — mock LLM active. No API credits will be spent.[/yellow]")
     elif api_key:
-        llm_client = LLMClient(config)
+        llm_client = LLMClient(config.llm)
     else:
         llm_client = MockLLMClient()
         console.print("[yellow]No ANTHROPIC_API_KEY found — using mock LLM. Signals are not real.[/yellow]")

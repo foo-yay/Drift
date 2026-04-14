@@ -37,6 +37,10 @@ class ResponseParser:
         raw_dict: dict = {}
         try:
             raw_dict = self._extract_json(raw_text)
+            # Claude sometimes returns hold_minutes=0 on NO_TRADE — clamp to 1
+            # to satisfy the model constraint (hold_minutes is irrelevant for NO_TRADE anyway)
+            if raw_dict.get("hold_minutes", 1) < 1:
+                raw_dict["hold_minutes"] = 1
             decision = LLMDecision.model_validate(raw_dict)
             return decision, raw_dict
         except Exception as exc:  # noqa: BLE001
