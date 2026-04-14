@@ -2,6 +2,8 @@
     "chat.tools.terminal.autoApprove": {
         "gh": true,
         "pip": true,
-        "drift": true
+        "drift": true,
+        "git checkout": true,
+        "git pull": true
     }
 }

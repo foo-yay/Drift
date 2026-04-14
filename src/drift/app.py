@@ -4,8 +4,10 @@ from datetime import datetime, timezone
 from time import sleep
 
 from drift.config.models import AppConfig
-from drift.models import SignalEvent
-from drift.output.console import render_startup, render_status, render_success
+from drift.data.providers.yfinance_provider import YFinanceProvider
+from drift.features.engine import FeatureEngine
+from drift.models import MarketSnapshot, SignalEvent
+from drift.output.console import render_snapshot, render_startup, render_status, render_success
 from drift.storage.logger import EventLogger
 
 
@@ -14,32 +16,63 @@ class DriftApplication:
         self.config = config
         self.config_path = config_path
         self.event_logger = EventLogger(config.storage.jsonl_event_log)
-
-    def validate_runtime(self) -> None:
-        if self.config.app.mode != "dry-run":
-            msg = (
-                "Only dry-run mode is wired in the initial scaffold. "
-                "Configure a provider, feature pipeline, and LLM integration before using "
-                f"{self.config.app.mode}."
-            )
-            raise NotImplementedError(msg)
+        self._provider = YFinanceProvider()
+        self._engine = FeatureEngine(config)
 
     def run_once(self) -> None:
-        self.validate_runtime()
         render_startup(self.config, self.config_path)
-        render_status("validated configuration and initialized dry-run scaffold")
 
+        symbol = self.config.instrument.symbol
+
+        # ------------------------------------------------------------------
+        # Fetch market data
+        # ------------------------------------------------------------------
+        render_status("fetching market data...")
+        try:
+            last_price = self._provider.get_latest_quote(symbol)
+        except ValueError as exc:
+            render_status(f"[red]data error:[/red] {exc} — skipping cycle")
+            return
+
+        session = self._provider.get_session_status(symbol)
+        bars_1m = self._provider.get_recent_bars(symbol, "1m", self.config.lookbacks.bars_1m)
+        bars_5m = self._provider.get_recent_bars(symbol, "5m", self.config.lookbacks.bars_5m)
+        bars_1h = self._provider.get_recent_bars(symbol, "1h", self.config.lookbacks.bars_1h)
+
+        render_success(
+            f"data fetched — {len(bars_1m)}×1m  {len(bars_5m)}×5m  {len(bars_1h)}×1h  "
+            f"quote={last_price:,.2f}  session={session}"
+        )
+
+        # ------------------------------------------------------------------
+        # Compute features → MarketSnapshot
+        # ------------------------------------------------------------------
+        render_status("computing features...")
+        snapshot: MarketSnapshot = self._engine.compute(
+            bars_1m=bars_1m,
+            bars_5m=bars_5m,
+            bars_1h=bars_1h,
+            last_price=last_price,
+            session=session,
+        )
+        render_snapshot(snapshot)
+
+        # ------------------------------------------------------------------
+        # Log the cycle event
+        # ------------------------------------------------------------------
         event = SignalEvent(
             event_time=datetime.now(tz=timezone.utc),
-            symbol=self.config.instrument.symbol,
-            final_outcome="DRY_RUN",
-            final_reason="Initial project scaffold validated successfully.",
+            symbol=symbol,
+            snapshot=snapshot.model_dump(mode="json"),
+            final_outcome="SNAPSHOT_ONLY",
+            final_reason="Feature engine cycle complete. Gate and LLM layers not yet wired.",
         )
         self.event_logger.append_event(event)
-        render_success(f"logged dry-run lifecycle event to {self.config.storage.jsonl_event_log}")
+        render_success(f"cycle logged to {self.config.storage.jsonl_event_log}")
 
     def run_forever(self) -> None:
         while True:
             self.run_once()
             sleep(self.config.app.loop_interval_seconds)
+
 
