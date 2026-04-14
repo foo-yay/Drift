@@ -24,7 +24,7 @@ def _make_config(
     skip: int = 10,
 ) -> SessionsSection:
     if blocks is None:
-        blocks = [("09:40", "11:30"), ("13:30", "15:30")]
+        blocks = [("09:40", "15:30")]
     return SessionsSection(
         enabled=enabled,
         blocks=[SessionBlock(start=s, end=e) for s, e in blocks],
@@ -154,34 +154,33 @@ class TestSessionGateSkipWindow:
 
 
 class TestSessionGateTradingBlocks:
-    def test_passes_inside_first_block(self):
+    def test_passes_inside_block(self):
         result = _evaluate_at(10, 30, _make_config())
         assert result.passed
         assert "09:40" in result.reason
 
-    def test_passes_inside_second_block(self):
+    def test_passes_through_midday(self):
+        """12:00 is inside the single continuous RTH block."""
+        result = _evaluate_at(12, 0, _make_config())
+        assert result.passed
+
+    def test_passes_in_afternoon(self):
         result = _evaluate_at(14, 0, _make_config())
         assert result.passed
-        assert "13:30" in result.reason
+        assert "09:40" in result.reason
 
     def test_passes_at_block_start_boundary(self):
         result = _evaluate_at(9, 40, _make_config())
         assert result.passed
 
     def test_passes_at_block_end_boundary(self):
-        result = _evaluate_at(11, 30, _make_config())
+        result = _evaluate_at(15, 30, _make_config())
         assert result.passed
 
-    def test_blocks_between_blocks(self):
-        """12:00 is between 11:30 and 13:30 — the lunch gap."""
-        result = _evaluate_at(12, 0, _make_config())
-        assert not result.passed
-        assert "12:00" in result.reason
-
-    def test_blocks_before_first_block(self):
+    def test_blocks_before_block(self):
         result = _evaluate_at(9, 15, _make_config(skip=0))
         assert not result.passed
 
-    def test_blocks_after_last_block(self):
+    def test_blocks_after_block(self):
         result = _evaluate_at(16, 0, _make_config())
         assert not result.passed

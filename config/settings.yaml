@@ -14,8 +14,6 @@ sessions:
   enabled: true
   blocks:
     - start: "09:40"
-      end: "11:30"
-    - start: "13:30"
       end: "15:30"
   skip_first_n_minutes_after_open: 10
 
