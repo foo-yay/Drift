@@ -169,6 +169,7 @@ def replay(
     step: Annotated[int, typer.Option("--step", help="Fire the pipeline every N 1m bars (default 15 = every 15 minutes).")] = 15,
     disable_session_gate: Annotated[bool, typer.Option("--disable-session-gate", help="Allow signals outside RTH hours.")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", help="Print the full snapshot panel on each step.")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Use mock LLM — no API calls, no credits spent.")] = False,
 ) -> None:
     """Replay historical bars through the full Drift pipeline.
 
@@ -202,9 +203,13 @@ def replay(
 
     import os
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    llm_client = LLMClient(config) if api_key else MockLLMClient()
-    if not api_key:
-        from drift.output.console import console
+    if dry_run:
+        llm_client = MockLLMClient()
+        console.print("[yellow]DRY RUN — mock LLM active. No API credits will be spent.[/yellow]")
+    elif api_key:
+        llm_client = LLMClient(config)
+    else:
+        llm_client = MockLLMClient()
         console.print("[yellow]No ANTHROPIC_API_KEY found — using mock LLM. Signals are not real.[/yellow]")
 
     # ------------------------------------------------------------------
