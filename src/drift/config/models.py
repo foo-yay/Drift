@@ -64,6 +64,14 @@ class FeaturesSection(BaseModel):
         return value
 
 
+class CalendarSection(BaseModel):
+    enabled: bool
+    buffer_minutes_before: int = Field(ge=0)
+    buffer_minutes_after: int = Field(ge=0)
+    filter_countries: list[str]  # e.g. ["USD"]
+    cache_ttl_minutes: int = Field(gt=0)
+
+
 class RiskSection(BaseModel):
     min_confidence: int = Field(ge=0, le=100)
     min_reward_risk: float = Field(gt=0)
@@ -118,6 +126,7 @@ class AppConfig(BaseModel):
     lookbacks: LookbackSection
     features: FeaturesSection
     risk: RiskSection
+    calendar: CalendarSection
     strategy: StrategySection
     llm: LLMSection
     storage: StorageSection
