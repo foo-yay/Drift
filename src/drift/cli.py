@@ -31,8 +31,8 @@ def run(
     ),
     once: Annotated[
         bool,
-        typer.Option("--once/--loop", help="Run a single cycle or continue looping."),
-    ] = True,
+        typer.Option("--once/--loop", help="Run a single cycle then exit. Default is to loop continuously."),
+    ] = False,
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", help="Bypass session gate and use mock LLM. Test outside market hours without spending API credits."),
@@ -40,7 +40,7 @@ def run(
 ) -> None:
     config = load_app_config(config_path)
     application = DriftApplication(config=config, config_path=config_path, dry_run=dry_run)
-    if dry_run or once:
+    if once:
         application.run_once()
         return
     application.run_forever()
