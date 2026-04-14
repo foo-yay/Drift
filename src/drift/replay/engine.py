@@ -44,6 +44,7 @@ from drift.output.console import (
     render_trade_plan,
 )
 from drift.planning.trade_plan_builder import TradePlanBuilder
+from drift.replay.outcome import OutcomeResult, resolve_outcome
 from drift.replay.provider import ReplayProvider
 from drift.storage.logger import EventLogger
 
@@ -65,6 +66,11 @@ class ReplaySummary:
     blocked: int = 0
     llm_no_trade: int = 0
     trade_plans_issued: int = 0
+    tp1_hits: int = 0
+    tp2_hits: int = 0
+    stop_hits: int = 0
+    time_stops: int = 0
+    session_ends: int = 0
     events: list[SignalEvent] = field(default_factory=list)
 
     @property
@@ -72,6 +78,16 @@ class ReplaySummary:
         if self.pipeline_steps == 0:
             return 0.0
         return round(self.trade_plans_issued / self.pipeline_steps * 100, 1)
+
+    @property
+    def outcomes_resolved(self) -> int:
+        return self.tp1_hits + self.tp2_hits + self.stop_hits + self.time_stops + self.session_ends
+
+    @property
+    def win_rate_pct(self) -> float:
+        if self.outcomes_resolved == 0:
+            return 0.0
+        return round((self.tp1_hits + self.tp2_hits) / self.outcomes_resolved * 100, 1)
 
 
 class ReplayEngine:
@@ -144,9 +160,14 @@ class ReplayEngine:
             summary.total_steps += 1
 
             if step % self._step_every_n == 0:
-                event = self._run_pipeline_step()
+                result = self._run_pipeline_step()
                 summary.pipeline_steps += 1
-                if event is not None:
+                if result is not None:
+                    # Trade plan steps return (event, outcome); others return just event
+                    if isinstance(result, tuple):
+                        event, outcome = result
+                    else:
+                        event, outcome = result, None
                     summary.events.append(event)
                     if event.final_outcome == "BLOCKED":
                         summary.blocked += 1
@@ -154,6 +175,17 @@ class ReplayEngine:
                         summary.llm_no_trade += 1
                     elif event.final_outcome == "TRADE_PLAN_ISSUED":
                         summary.trade_plans_issued += 1
+                        if outcome is not None:
+                            if outcome.outcome == "TP1_HIT":
+                                summary.tp1_hits += 1
+                            elif outcome.outcome == "TP2_HIT":
+                                summary.tp2_hits += 1
+                            elif outcome.outcome == "STOP_HIT":
+                                summary.stop_hits += 1
+                            elif outcome.outcome == "TIME_STOP":
+                                summary.time_stops += 1
+                            elif outcome.outcome == "SESSION_END":
+                                summary.session_ends += 1
 
             if not self._provider.has_next():
                 break
@@ -289,6 +321,11 @@ class ReplayEngine:
 
         if self._verbose:
             render_trade_plan(plan)
+
+        # Resolve outcome against subsequent bars (replay has lookahead)
+        bars_after = self._provider.bars_after_cursor()
+        outcome = resolve_outcome(plan, bars_after)
+
         event = SignalEvent(
             event_time=ts,
             symbol=symbol,
@@ -299,14 +336,36 @@ class ReplayEngine:
             trade_plan=plan.model_dump(mode="json"),
             final_outcome="TRADE_PLAN_ISSUED",
             final_reason=f"{plan.bias} | {plan.setup_type} | confidence={plan.confidence}",
+            replay_outcome={
+                "outcome": outcome.outcome,
+                "bars_elapsed": outcome.bars_elapsed,
+                "minutes_elapsed": outcome.minutes_elapsed,
+                "exit_price": outcome.exit_price,
+                "pnl_points": round(outcome.pnl_points, 2),
+            },
         )
         self._event_logger.append_event(event)
+
+        # Format outcome suffix for compact display
+        pnl_sign = "+" if outcome.pnl_points >= 0 else ""
+        outcome_suffix = (
+            f"→ {outcome.outcome} {pnl_sign}{outcome.pnl_points:.1f}pts ({outcome.minutes_elapsed}min)"
+        )
+        _outcome_color = {
+            "TP1_HIT": "green",
+            "TP2_HIT": "bright_green",
+            "STOP_HIT": "red",
+            "TIME_STOP": "yellow",
+            "SESSION_END": "yellow",
+        }.get(outcome.outcome, "white")
+
         if self._verbose:
-            render_success(f"trade plan issued at {ts.strftime('%H:%M')} UTC")
+            render_success(f"trade plan issued at {ts.strftime('%H:%M')} UTC  {outcome_suffix}")
         else:
             from drift.output.console import console
             console.print(
-                f"[green][replay] {ts.strftime('%Y-%m-%d %H:%M')} — "
-                f"SIGNAL: {plan.bias} | {plan.setup_type} | conf={plan.confidence}[/green]"
+                f"[{_outcome_color}][replay] {ts.strftime('%Y-%m-%d %H:%M')} — "
+                f"SIGNAL: {plan.bias} | {plan.setup_type} | conf={plan.confidence}  "
+                f"{outcome_suffix}[/{_outcome_color}]"
             )
-        return event
+        return event, outcome

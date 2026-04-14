@@ -877,8 +877,11 @@ This seam means integrating NinjaTrader or another broker later requires only im
 ## Phase 4: Replay and evaluation
 
 - historical replay runner
-- signal evaluation logic
-- summary metrics
+- bar-by-bar cursor stepping, session label classification
+- signal evaluation logic (gate layer + mock/live LLM)
+- outcome resolution: TP1/TP2/STOP/TIME_STOP/SESSION_END annotated per signal
+- win rate and P&L tracking in ReplaySummary
+- summary metrics printed after each session replay
 
 ## Phase 5: Operator polish
 

@@ -131,4 +131,5 @@ class SignalEvent(BaseModel):
     trade_plan: dict[str, Any] | None = None
     final_outcome: str
     final_reason: str
+    replay_outcome: dict[str, Any] | None = None  # OutcomeResult if resolved during replay
 

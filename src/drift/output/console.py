@@ -214,9 +214,32 @@ def render_replay_summary(summary: "ReplaySummary") -> None:  # type: ignore[nam
     table.add_row("Blocked by gates", str(summary.blocked))
     table.add_row("LLM NO_TRADE", str(summary.llm_no_trade))
     table.add_row(
-        "[bold green]Trade plans issued[/bold green]",
-        f"[bold green]{summary.trade_plans_issued}[/bold green]",
+        "[bold]Trade plans issued[/bold]",
+        f"[bold]{summary.trade_plans_issued}[/bold]",
     )
     table.add_row("Signal rate", f"{summary.signal_rate_pct}%")
+
+    if summary.outcomes_resolved > 0:
+        table.add_row("", "")  # spacer
+        table.add_row(
+            "[bold green]TP1 hits[/bold green]",
+            f"[bold green]{summary.tp1_hits}[/bold green]",
+        )
+        table.add_row(
+            "[bold bright_green]TP2 hits[/bold bright_green]",
+            f"[bold bright_green]{summary.tp2_hits}[/bold bright_green]",
+        )
+        table.add_row(
+            "[bold red]Stop hits[/bold red]",
+            f"[bold red]{summary.stop_hits}[/bold red]",
+        )
+        table.add_row("Time stops", str(summary.time_stops))
+        table.add_row("Session ends", str(summary.session_ends))
+        table.add_row(
+            "[bold]Win rate[/bold]",
+            f"[bold]{summary.win_rate_pct}%[/bold]  "
+            f"({summary.tp1_hits + summary.tp2_hits}W / {summary.stop_hits}L)",
+        )
+
     console.print(Panel(table, title="[bold]Replay Summary[/bold]", border_style="cyan", expand=False))
 

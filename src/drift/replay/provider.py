@@ -126,3 +126,7 @@ class ReplayProvider(MarketDataProvider):
 
     def is_market_open(self, symbol: str) -> bool:
         return self.get_session_status(symbol) == "RTH"
+
+    def bars_after_cursor(self) -> list[Bar]:
+        """Return all 1m bars strictly after the current cursor position."""
+        return self._bars_1m[self._cursor + 1:]
