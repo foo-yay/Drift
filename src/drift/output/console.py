@@ -205,3 +205,18 @@ def render_trade_plan(plan: TradePlan) -> None:
     invalid_text = "\n".join(f"  • {c}" for c in plan.invalidation_conditions)
     console.print(Panel(invalid_text, title="Invalidation Conditions", border_style="dim", expand=False))
 
+
+def render_replay_summary(summary: "ReplaySummary") -> None:  # type: ignore[name-defined]
+    """Render a replay run summary table."""
+    table = Table(show_header=False, box=None)
+    table.add_row("Total 1m bars stepped", str(summary.total_steps))
+    table.add_row("Pipeline evaluations", str(summary.pipeline_steps))
+    table.add_row("Blocked by gates", str(summary.blocked))
+    table.add_row("LLM NO_TRADE", str(summary.llm_no_trade))
+    table.add_row(
+        "[bold green]Trade plans issued[/bold green]",
+        f"[bold green]{summary.trade_plans_issued}[/bold green]",
+    )
+    table.add_row("Signal rate", f"{summary.signal_rate_pct}%")
+    console.print(Panel(table, title="[bold]Replay Summary[/bold]", border_style="cyan", expand=False))
+

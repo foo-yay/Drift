@@ -156,5 +156,98 @@ def resume(
         console.print("[dim]Kill switch was not active.[/dim]")
 
 
+@app.command()
+def replay(
+    config_path: Annotated[str, typer.Option("--config", help="Path to settings YAML.")] = (
+        "config/settings.yaml"
+    ),
+    start: Annotated[str, typer.Option("--start", help="Start date YYYY-MM-DD. Fetches from yfinance (last 7 days only for 1m data).")] = "",
+    end: Annotated[str, typer.Option("--end", help="End date YYYY-MM-DD.")] = "",
+    csv_1m: Annotated[str, typer.Option("--csv-1m", help="Path to pre-downloaded 1m bar CSV.")] = "",
+    csv_5m: Annotated[str, typer.Option("--csv-5m", help="Path to pre-downloaded 5m bar CSV.")] = "",
+    csv_1h: Annotated[str, typer.Option("--csv-1h", help="Path to pre-downloaded 1h bar CSV.")] = "",
+    step: Annotated[int, typer.Option("--step", help="Fire the pipeline every N 1m bars (default 15 = every 15 minutes).")] = 15,
+    disable_session_gate: Annotated[bool, typer.Option("--disable-session-gate", help="Allow signals outside RTH hours.")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", help="Print the full snapshot panel on each step.")] = False,
+) -> None:
+    """Replay historical bars through the full Drift pipeline.
+
+    Data source — pick one:
+
+    \b
+    1. Fetch from yfinance (last 7 days only for 1m):
+         drift replay --start 2026-04-10 --end 2026-04-11
+
+    \b
+    2. Load from pre-downloaded CSVs:
+         drift replay --csv-1m data/MNQ_1m.csv --csv-5m data/MNQ_5m.csv --csv-1h data/MNQ_1h.csv
+    """
+    from drift.output.console import render_replay_summary
+    from drift.replay.engine import ReplayEngine
+    from drift.replay.loader import fetch_bars_for_date_range, load_bars_from_csv
+
+    config = load_app_config(config_path)
+    symbol = config.instrument.symbol
+
+    # ------------------------------------------------------------------
+    # Load bars
+    # ------------------------------------------------------------------
+    use_csv = csv_1m or csv_5m or csv_1h
+    use_dates = start or end
+
+    if use_csv and use_dates:
+        console.print("[bold red]ERROR[/bold red] Provide either --start/--end or --csv-*, not both.")
+        raise typer.Exit(1)
+
+    if not use_csv and not use_dates:
+        console.print("[bold red]ERROR[/bold red] Provide --start/--end or --csv-1m/--csv-5m/--csv-1h.")
+        raise typer.Exit(1)
+
+    if use_csv:
+        missing = [f for f, v in [("--csv-1m", csv_1m), ("--csv-5m", csv_5m), ("--csv-1h", csv_1h)] if not v]
+        if missing:
+            console.print(f"[bold red]ERROR[/bold red] Missing CSV paths: {', '.join(missing)}")
+            raise typer.Exit(1)
+        console.rule(f"[bold]Drift Replay — {symbol} (CSV)[/bold]")
+        try:
+            bars_1m, bars_5m, bars_1h = load_bars_from_csv(csv_1m, csv_5m, csv_1h, symbol)
+        except (FileNotFoundError, KeyError, ValueError) as exc:
+            console.print(f"[bold red]ERROR[/bold red] Failed to load CSVs: {exc}")
+            raise typer.Exit(1) from exc
+    else:
+        if not start or not end:
+            console.print("[bold red]ERROR[/bold red] Both --start and --end are required when fetching from yfinance.")
+            raise typer.Exit(1)
+        console.rule(f"[bold]Drift Replay — {symbol} ({start} → {end})[/bold]")
+        console.print("[dim]Fetching bars from yfinance...[/dim]")
+        try:
+            bars_1m, bars_5m, bars_1h = fetch_bars_for_date_range(symbol, start, end)
+        except ValueError as exc:
+            console.print(f"[bold red]ERROR[/bold red] {exc}")
+            raise typer.Exit(1) from exc
+
+    console.print(
+        f"Loaded [bold]{len(bars_1m)}[/bold] 1m bars, "
+        f"[bold]{len(bars_5m)}[/bold] 5m bars, "
+        f"[bold]{len(bars_1h)}[/bold] 1h bars"
+    )
+
+    # ------------------------------------------------------------------
+    # Run
+    # ------------------------------------------------------------------
+    engine = ReplayEngine(
+        config=config,
+        bars_1m=bars_1m,
+        bars_5m=bars_5m,
+        bars_1h=bars_1h,
+        step_every_n_bars=step,
+        disable_session_gate=disable_session_gate,
+        verbose=verbose,
+    )
+
+    summary = engine.run()
+    render_replay_summary(summary)
+
+
 if __name__ == "__main__":
     app()

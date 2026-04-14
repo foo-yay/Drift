@@ -888,6 +888,30 @@ This seam means integrating NinjaTrader or another broker later requires only im
 
 ---
 
+## Phase 6: Streamlit replay GUI (deferred — post Phase 4)
+
+**Decision (April 2026):** Build the terminal-based replay engine first (Phase 4). Once the engine is proven, bolt a Streamlit UI on top.
+
+**Why Streamlit:**
+- Pure Python — no JavaScript, no separate frontend project
+- Candlestick chart (Plotly) with entry zone, stop, and TP levels drawn directly on the chart
+- Step through historical bars with a slider or prev/next buttons
+- Side panel shows the gate report and LLM decision for the selected bar
+- Summary table of all signals that fired across the session with outcome annotations
+- Runs locally (`streamlit run ...`) — nothing goes to the internet
+- Adds `streamlit` and `plotly` to deps
+
+**What to reuse from Phase 4:**
+- `replay/engine.py` — the bar-feeding loop runs unchanged; Streamlit is just a new frontend calling it
+- `FeatureEngine`, `GateRunner`, `MockLLMClient` / `LLMClient`, `TradePlanBuilder` — all unchanged
+- `SignalEvent` log — Streamlit reads the JSONL log and renders it visually
+
+**Entry point:** `streamlit run src/drift/replay/streamlit_app.py` or a `drift-replay` CLI alias
+
+**Do not start this until:** Phase 4 replay engine is complete and producing correct signal logs.
+
+---
+
 # 24. What the AI Coding Assistant Should Build First
 
 When handing this document to an AI coder, the first request should be:
