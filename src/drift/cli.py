@@ -161,8 +161,8 @@ def replay(
     config_path: Annotated[str, typer.Option("--config", help="Path to settings YAML.")] = (
         "config/settings.yaml"
     ),
-    start: Annotated[str, typer.Option("--start", help="Start date YYYY-MM-DD. Fetches from yfinance (last 7 days only for 1m data).")] = "",
-    end: Annotated[str, typer.Option("--end", help="End date YYYY-MM-DD.")] = "",
+    start: Annotated[str, typer.Option("--start", help="Start date YYYY-MM-DD. Defaults to yesterday.")] = "",
+    end: Annotated[str, typer.Option("--end", help="End date YYYY-MM-DD. Defaults to yesterday.")] = "",
     csv_1m: Annotated[str, typer.Option("--csv-1m", help="Path to pre-downloaded 1m bar CSV.")] = "",
     csv_5m: Annotated[str, typer.Option("--csv-5m", help="Path to pre-downloaded 5m bar CSV.")] = "",
     csv_1h: Annotated[str, typer.Option("--csv-1h", help="Path to pre-downloaded 1h bar CSV.")] = "",
@@ -172,16 +172,25 @@ def replay(
 ) -> None:
     """Replay historical bars through the full Drift pipeline.
 
-    Data source — pick one:
+    With no arguments, replays yesterday's session fetched from yfinance.
 
     \b
-    1. Fetch from yfinance (last 7 days only for 1m):
+    Data source options:
+
+    \b
+    1. Default — yesterday from yfinance:
+         drift replay
+
+    \b
+    2. Specific date range from yfinance (last 7 days only for 1m):
          drift replay --start 2026-04-10 --end 2026-04-11
 
     \b
-    2. Load from pre-downloaded CSVs:
+    3. Pre-downloaded CSVs (no date limit):
          drift replay --csv-1m data/MNQ_1m.csv --csv-5m data/MNQ_5m.csv --csv-1h data/MNQ_1h.csv
     """
+    from datetime import date, timedelta
+
     from drift.output.console import render_replay_summary
     from drift.replay.engine import ReplayEngine
     from drift.replay.loader import fetch_bars_for_date_range, load_bars_from_csv
@@ -199,10 +208,6 @@ def replay(
         console.print("[bold red]ERROR[/bold red] Provide either --start/--end or --csv-*, not both.")
         raise typer.Exit(1)
 
-    if not use_csv and not use_dates:
-        console.print("[bold red]ERROR[/bold red] Provide --start/--end or --csv-1m/--csv-5m/--csv-1h.")
-        raise typer.Exit(1)
-
     if use_csv:
         missing = [f for f, v in [("--csv-1m", csv_1m), ("--csv-5m", csv_5m), ("--csv-1h", csv_1h)] if not v]
         if missing:
@@ -215,6 +220,15 @@ def replay(
             console.print(f"[bold red]ERROR[/bold red] Failed to load CSVs: {exc}")
             raise typer.Exit(1) from exc
     else:
+        # Default: yesterday. Skip back over weekends (Sat→Fri, Sun→Fri).
+        if not start and not end:
+            yesterday = date.today() - timedelta(days=1)
+            if yesterday.weekday() == 5:   # Saturday
+                yesterday -= timedelta(days=1)
+            elif yesterday.weekday() == 6:  # Sunday
+                yesterday -= timedelta(days=2)
+            start = end = str(yesterday)
+
         if not start or not end:
             console.print("[bold red]ERROR[/bold red] Both --start and --end are required when fetching from yfinance.")
             raise typer.Exit(1)
