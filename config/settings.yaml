@@ -36,7 +36,7 @@ risk:
   min_reward_risk: 1.8
   max_signals_per_day: 3
   cooldown_minutes: 15
-  max_stop_points: 30.0
+  max_stop_points: 40.0
   min_stop_points: 6.0
   atr_stop_floor_mult: 0.8
   atr_target_mult: 1.8
