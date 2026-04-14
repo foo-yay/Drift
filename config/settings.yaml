@@ -53,6 +53,15 @@ calendar:
     - USD
   cache_ttl_minutes: 60
 
+gates:
+  regime_enabled: true
+  min_trend_score: 35
+  min_momentum_score: 30
+  block_on_extreme_volatility: true
+  cooldown_enabled: true
+  kill_switch_enabled: true
+  kill_switch_path: data/.kill_switch
+
 strategy:
   allowed_setup_types:
     - pullback_continuation

@@ -114,6 +114,40 @@ def fetch_data(
     console.print(score_table)
 
 
+@app.command()
+def kill(
+    config_path: Annotated[str, typer.Option("--config", help="Path to settings YAML.")] = (
+        "config/settings.yaml"
+    ),
+) -> None:
+    """Activate the kill switch — all signals will be blocked immediately."""
+    from pathlib import Path
+
+    config = load_app_config(config_path)
+    path = Path(config.gates.kill_switch_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
+    console.print(f"[bold red]KILL SWITCH ACTIVE[/bold red] — signals blocked. ({path})")
+    console.print("Run [bold]drift resume[/bold] to re-enable.")
+
+
+@app.command()
+def resume(
+    config_path: Annotated[str, typer.Option("--config", help="Path to settings YAML.")] = (
+        "config/settings.yaml"
+    ),
+) -> None:
+    """Deactivate the kill switch — signals will resume on the next cycle."""
+    from pathlib import Path
+
+    config = load_app_config(config_path)
+    path = Path(config.gates.kill_switch_path)
+    if path.exists():
+        path.unlink()
+        console.print(f"[bold green]KILL SWITCH CLEARED[/bold green] — signals re-enabled. ({path})")
+    else:
+        console.print("[dim]Kill switch was not active.[/dim]")
+
 
 if __name__ == "__main__":
     app()

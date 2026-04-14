@@ -72,6 +72,16 @@ class CalendarSection(BaseModel):
     cache_ttl_minutes: int = Field(gt=0)
 
 
+class GatesSection(BaseModel):
+    regime_enabled: bool
+    min_trend_score: int = Field(ge=0, le=100)
+    min_momentum_score: int = Field(ge=0, le=100)
+    block_on_extreme_volatility: bool
+    cooldown_enabled: bool
+    kill_switch_enabled: bool
+    kill_switch_path: str
+
+
 class RiskSection(BaseModel):
     min_confidence: int = Field(ge=0, le=100)
     min_reward_risk: float = Field(gt=0)
@@ -127,6 +137,7 @@ class AppConfig(BaseModel):
     features: FeaturesSection
     risk: RiskSection
     calendar: CalendarSection
+    gates: GatesSection
     strategy: StrategySection
     llm: LLMSection
     storage: StorageSection
