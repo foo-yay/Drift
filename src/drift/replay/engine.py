@@ -233,9 +233,10 @@ class ReplayEngine:
             return event
 
         # LLM adjudication
-        render_status(
-            f"[replay] {ts.strftime('%Y-%m-%d %H:%M')} UTC — gates passed, calling LLM..."
-        )
+        if self._verbose:
+            render_status(
+                f"[replay] {ts.strftime('%Y-%m-%d %H:%M')} UTC — gates passed, calling LLM..."
+            )
         decision, raw_dict, raw_text = self._llm_client.adjudicate(snapshot, gate_report)
         if self._verbose:
             render_llm_decision(decision)
@@ -276,10 +277,18 @@ class ReplayEngine:
                 final_reason="Trade plan builder rejected signal (stop/R:R/confidence constraint).",
             )
             self._event_logger.append_event(event)
-            render_no_trade(decision, "Signal rejected by trade plan constraints.")
+            if self._verbose:
+                render_no_trade(decision, "Signal rejected by trade plan constraints.")
+            else:
+                from drift.output.console import console
+                console.print(
+                    f"[dim][replay] {ts.strftime('%Y-%m-%d %H:%M')} — "
+                    f"REJECTED: plan constraints[/dim]"
+                )
             return event
 
-        render_trade_plan(plan)
+        if self._verbose:
+            render_trade_plan(plan)
         event = SignalEvent(
             event_time=ts,
             symbol=symbol,
@@ -292,5 +301,12 @@ class ReplayEngine:
             final_reason=f"{plan.bias} | {plan.setup_type} | confidence={plan.confidence}",
         )
         self._event_logger.append_event(event)
-        render_success(f"trade plan issued at {ts.strftime('%H:%M')} UTC")
+        if self._verbose:
+            render_success(f"trade plan issued at {ts.strftime('%H:%M')} UTC")
+        else:
+            from drift.output.console import console
+            console.print(
+                f"[green][replay] {ts.strftime('%Y-%m-%d %H:%M')} — "
+                f"SIGNAL: {plan.bias} | {plan.setup_type} | conf={plan.confidence}[/green]"
+            )
         return event
