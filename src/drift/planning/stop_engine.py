@@ -1,7 +1,10 @@
 from __future__ import annotations
+import logging
 
 from drift.config.models import RiskSection
 from drift.models import LLMDecision, MarketSnapshot
+
+logger = logging.getLogger(__name__)
 
 
 class StopEngine:
@@ -73,8 +76,16 @@ class StopEngine:
         stop_distance = abs(entry - stop)
 
         if stop_distance < self._cfg.min_stop_points:
+            logger.info(
+                "Stop rejected (%s) — distance %.2f pts below min %.2f",
+                direction, stop_distance, self._cfg.min_stop_points,
+            )
             return None  # too tight
         if stop_distance > self._cfg.max_stop_points:
+            logger.info(
+                "Stop rejected (%s) — distance %.2f pts exceeds max_stop_points %.2f",
+                direction, stop_distance, self._cfg.max_stop_points,
+            )
             return None  # too wide
 
         return round(stop, 2)
