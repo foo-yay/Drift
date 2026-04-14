@@ -215,7 +215,7 @@ class ReplayEngine:
             blocker = next(r for r in gate_report.results if not r.passed)
             if self._verbose:
                 render_gate_blocked(blocker)
-            else:
+            elif blocker.gate_name != "session":
                 from drift.output.console import console
                 console.print(
                     f"[dim][replay] {ts.strftime('%Y-%m-%d %H:%M')} — "
