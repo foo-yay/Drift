@@ -31,8 +31,8 @@ def run(
     ),
     once: Annotated[
         bool,
-        typer.Option("--once/--loop", help="Run a single cycle or continue looping."),
-    ] = True,
+        typer.Option("--once/--loop", help="Run a single cycle then exit. Default is to loop continuously."),
+    ] = False,
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", help="Bypass session gate and use mock LLM. Test outside market hours without spending API credits."),
@@ -40,7 +40,7 @@ def run(
 ) -> None:
     config = load_app_config(config_path)
     application = DriftApplication(config=config, config_path=config_path, dry_run=dry_run)
-    if dry_run or once:
+    if once:
         application.run_once()
         return
     application.run_forever()
@@ -170,6 +170,7 @@ def replay(
     disable_session_gate: Annotated[bool, typer.Option("--disable-session-gate", help="Allow signals outside RTH hours.")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", help="Print the full snapshot panel on each step.")] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Use mock LLM — no API calls, no credits spent.")] = False,
+    export_csv: Annotated[str, typer.Option("--export-csv", help="Write signal outcomes to a CSV file, e.g. logs/replay.csv.")] = "",
 ) -> None:
     """Replay historical bars through the full Drift pipeline.
 
@@ -276,6 +277,11 @@ def replay(
 
     summary = engine.run()
     render_replay_summary(summary)
+
+    if export_csv:
+        from drift.replay.csv_export import export_replay_csv
+        export_replay_csv(summary, export_csv)
+        console.print(f"[green]CSV exported → {export_csv}[/green]")
 
 
 if __name__ == "__main__":

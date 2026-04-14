@@ -4,6 +4,38 @@
         "pip": true,
         "drift": true,
         "git checkout": true,
-        "git pull": true
+        "git pull": true,
+        "pytest": true,
+        "/^cd \"/Users/elliot/Documents/My Documents/Business/Carolina Edge Gaming/Market Arbitrage/Stocks/2\\.0\" && source \\.venv/bin/activate && pytest -v 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "git -C \"/Users/elliot/Documents/My": true,
+        "/^cd \"/Users/elliot/Documents/My Documents/Business/Carolina Edge Gaming/Market Arbitrage/Stocks/2\\.0\" && source \\.venv/bin/activate && pip install anthropic 2>&1 \\| tail -5$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd \"/Users/elliot/Documents/My Documents/Business/Carolina Edge Gaming/Market Arbitrage/Stocks/2\\.0\" && source \\.venv/bin/activate && pytest -v 2>&1 \\| tail -30$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd \"/Users/elliot/Documents/My Documents/Business/Carolina Edge Gaming/Market Arbitrage/Stocks/2\\.0\" && source \\.venv/bin/activate && pytest tests/test_order_blocks\\.py -v 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd \"/Users/elliot/Documents/My Documents/Business/Carolina Edge Gaming/Market Arbitrage/Stocks/2\\.0\" && source \\.venv/bin/activate && pytest -v 2>&1 \\| tail -10$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "git restore": true,
+        ".venv/bin/pytest": true,
+        "/^cd \"/Users/elliot/Documents/My Documents/Business/Carolina Edge Gaming/Market Arbitrage/Stocks/2\\.0\" && source \\.venv/bin/activate && pytest tests/test_replay\\.py -v 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd \"/Users/elliot/Documents/My Documents/Business/Carolina Edge Gaming/Market Arbitrage/Stocks/2\\.0\" && source \\.venv/bin/activate && drift replay 2>&1 \\| head -60$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
     }
 }

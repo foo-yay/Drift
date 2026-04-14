@@ -26,6 +26,7 @@ from drift.output.console import (
     render_success,
     render_trade_plan,
 )
+from drift.output.notifications import notify_signal
 from drift.planning.trade_plan_builder import TradePlanBuilder
 from drift.storage.logger import EventLogger
 
@@ -181,6 +182,9 @@ class DriftApplication:
         )
         self.event_logger.append_event(event)
         render_success(f"trade plan logged to {self.config.storage.jsonl_event_log}")
+
+        if self.config.output.desktop_notifications:
+            notify_signal(plan)
 
     def run_forever(self) -> None:
         while True:
