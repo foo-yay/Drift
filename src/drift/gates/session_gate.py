@@ -41,22 +41,25 @@ class SessionGate(Gate):
                 reason="Session gate disabled in config.",
             )
 
-        if snapshot.session != "open":
+        # Accept both "open" (live provider) and "RTH" (replay provider / yfinance).
+        if snapshot.session not in ("open", "RTH"):
             return GateResult(
                 gate_name=self.name,
                 passed=False,
                 reason=f"Market not in regular session (status: '{snapshot.session}').",
             )
 
-        now_et = datetime.now(tz=_ET)
-        current_time = now_et.time().replace(second=0, microsecond=0)
+        # Use the snapshot timestamp so replay evaluates gates against the bar's
+        # actual time, not the current wall-clock time.
+        ref_dt = snapshot.as_of.astimezone(_ET)
+        current_time = ref_dt.time().replace(second=0, microsecond=0)
 
         # Additional skip window guard: first N minutes after official open.
         # This is relevant when a block starts exactly at 09:30 — the field
         # lets operators add a buffer without changing the block definition.
         skip_n = self._config.skip_first_n_minutes_after_open
         if skip_n > 0:
-            open_dt = datetime.combine(now_et.date(), _MARKET_OPEN, tzinfo=_ET)
+            open_dt = datetime.combine(ref_dt.date(), _MARKET_OPEN, tzinfo=_ET)
             skip_until = (open_dt + timedelta(minutes=skip_n)).time()
             if _MARKET_OPEN <= current_time < skip_until:
                 return GateResult(

@@ -1,7 +1,7 @@
 """Tests for SessionGate.
 
-Socket the gate uses real ET wall-clock time, so we patch datetime.now()
-to control what time is returned for each case.
+The gate now reads snapshot.as_of instead of datetime.now(), so we inject
+the desired ET time directly into the snapshot's as_of field.
 """
 from __future__ import annotations
 
@@ -32,9 +32,9 @@ def _make_config(
     )
 
 
-def _make_snapshot(session: str = "open") -> MarketSnapshot:
+def _make_snapshot(session: str = "open", as_of: datetime | None = None) -> MarketSnapshot:
     return MarketSnapshot(
-        as_of=datetime.now(tz=ZoneInfo("UTC")),
+        as_of=as_of or datetime.now(tz=ZoneInfo("UTC")),
         symbol="MNQ",
         last_price=21_000.0,
         session=session,
@@ -95,15 +95,11 @@ class _ClockableSessionGate(SessionGate):
 
 
 def _evaluate_at(et_hour: int, et_minute: int, config: SessionsSection, session: str = "open"):
-    """Evaluate SessionGate with a fixed ET clock time."""
-    snapshot = _make_snapshot(session=session)
+    """Evaluate SessionGate with snapshot.as_of set to the given ET time."""
+    as_of = datetime(2026, 4, 14, et_hour, et_minute, 0, tzinfo=_ET)
+    snapshot = _make_snapshot(session=session, as_of=as_of)
     gate = SessionGate(config)
-
-    fixed = datetime(2026, 4, 14, et_hour, et_minute, 0, tzinfo=_ET)
-    with patch("drift.gates.session_gate.datetime") as mock_dt:
-        mock_dt.now.return_value = fixed
-        mock_dt.combine = datetime.combine
-        return gate.evaluate(snapshot)
+    return gate.evaluate(snapshot)
 
 
 class TestSessionGateDisabled:
