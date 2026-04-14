@@ -15,8 +15,9 @@ class StopEngine:
        entry zone, padded by structure_buffer_points.
     2. ATR floor — if the structural stop would be too tight, enforce a
        minimum of atr * atr_stop_floor_mult.
-    3. Hard cap — reject if the resulting stop exceeds max_stop_points.
-    4. Hard floor — reject if the resulting stop is below min_stop_points.
+    3. Minimum clamp — if the result is still below min_stop_points, widen
+       to exactly min_stop_points (never reject for being too tight).
+    4. Hard cap — reject only if the stop exceeds max_stop_points.
     """
 
     def __init__(self, config: RiskSection, structure_buffer: float = 2.0) -> None:
@@ -77,10 +78,16 @@ class StopEngine:
 
         if stop_distance < self._cfg.min_stop_points:
             logger.info(
-                "Stop rejected (%s) — distance %.2f pts below min %.2f",
+                "Stop clamped (%s) — ATR-based distance %.2f pts below min %.2f; widening to min",
                 direction, stop_distance, self._cfg.min_stop_points,
             )
-            return None  # too tight
+            stop_distance = self._cfg.min_stop_points
+            stop = (
+                round(entry - stop_distance, 2)
+                if direction == "LONG"
+                else round(entry + stop_distance, 2)
+            )
+
         if stop_distance > self._cfg.max_stop_points:
             logger.info(
                 "Stop rejected (%s) — distance %.2f pts exceeds max_stop_points %.2f",
