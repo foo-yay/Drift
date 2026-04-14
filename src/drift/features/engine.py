@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 
 from drift.config.models import AppConfig
 from drift.features.momentum import MomentumFeatures
+from drift.features.order_blocks import OrderBlockFeatures
+from drift.features.rejection_blocks import RejectionBlockFeatures
 from drift.features.structure import StructureFeatures
 from drift.features.trend import TrendFeatures
 from drift.features.volatility import VolatilityFeatures
@@ -41,6 +43,8 @@ class FeatureEngine:
         self._volatility = VolatilityFeatures(atr_period=feat.atr_period)
         self._volume = VolumeFeatures(volume_spike_window=feat.volume_spike_window)
         self._structure = StructureFeatures(rolling_window=20)
+        self._order_blocks = OrderBlockFeatures(lookback=50, max_blocks=3)
+        self._rejection_blocks = RejectionBlockFeatures(lookback=30, max_blocks=3)
 
     def compute(
         self,
@@ -71,6 +75,8 @@ class FeatureEngine:
         volatility = self._volatility.compute(bars_1m)
         volume = self._volume.compute(bars_1m)
         structure = self._structure.compute(bars_5m)
+        order_block_data = self._order_blocks.compute(bars_5m)
+        rejection_block_data = self._rejection_blocks.compute(bars_5m)
 
         # ----------------------------------------------------------------
         # Derive regime scores (0–100, higher = more favorable for trading)
@@ -115,6 +121,8 @@ class FeatureEngine:
             medium_trend_state=medium_trend_state,
             momentum_state=momentum_state,
             volatility_regime=volatility_regime,
+            order_blocks=order_block_data.get("order_blocks", []),
+            rejection_blocks=rejection_block_data.get("rejection_blocks", []),
             market_note=market_note,
         )
 

@@ -114,6 +114,7 @@ class LLMSection(BaseModel):
     temperature: float = Field(ge=0, le=1)
     timeout_seconds: int = Field(gt=0)
     max_retries: int = Field(ge=0)
+    api_key_env: str = "ANTHROPIC_API_KEY"
 
 
 class StorageSection(BaseModel):

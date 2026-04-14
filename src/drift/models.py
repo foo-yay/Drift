@@ -66,6 +66,8 @@ class MarketSnapshot(BaseModel):
     medium_trend_state: str
     momentum_state: str
     volatility_regime: str
+    order_blocks: list[dict] = Field(default_factory=list)
+    rejection_blocks: list[dict] = Field(default_factory=list)
     market_note: str | None = None
 
 

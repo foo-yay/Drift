@@ -16,6 +16,7 @@ dependencies = [
   "typer>=0.12,<1",
   "yfinance>=0.2.50,<1",
   "certifi>=2024.0,<2026",
+  "anthropic>=0.95,<2",
 ]
 
 [project.optional-dependencies]

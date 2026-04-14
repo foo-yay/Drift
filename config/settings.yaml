@@ -1,7 +1,7 @@
 app:
   name: Drift
   timezone: America/New_York
-  loop_interval_seconds: 60
+  loop_interval_seconds: 900
   mode: dry-run
   log_level: INFO
 
@@ -72,11 +72,12 @@ strategy:
   structure_buffer_points: 2.0
 
 llm:
-  provider: openai
-  model: gpt-5.4
+  provider: anthropic
+  model: claude-sonnet-4-6
   temperature: 0.1
-  timeout_seconds: 20
+  timeout_seconds: 30
   max_retries: 2
+  api_key_env: ANTHROPIC_API_KEY
 
 storage:
   use_sqlite: true

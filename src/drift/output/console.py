@@ -6,7 +6,7 @@ from rich.table import Table
 from rich import box as rich_box
 
 from drift.config.models import AppConfig
-from drift.models import GateResult, MarketSnapshot
+from drift.models import GateResult, LLMDecision, MarketSnapshot, TradePlan
 
 console = Console()
 
@@ -141,4 +141,65 @@ def render_gate_blocked(result: GateResult) -> None:
         )
     )
 
+
+def render_llm_decision(decision: LLMDecision) -> None:
+    """Render the raw LLM adjudication result."""
+    color = "green" if decision.decision == "LONG" else "red" if decision.decision == "SHORT" else "yellow"
+    table = Table(show_header=False, box=None)
+    table.add_row("Decision", f"[bold {color}]{decision.decision}[/bold {color}]")
+    table.add_row("Confidence", f"{decision.confidence}/100")
+    table.add_row("Setup", decision.setup_type)
+    table.add_row("Entry Style", decision.entry_style)
+    table.add_row("Thesis", decision.thesis)
+    table.add_row("Invalidation", decision.invalidation_hint)
+    table.add_row("Hold", f"{decision.hold_minutes} min")
+    console.print(Panel(table, title="LLM Decision", border_style=color, expand=False))
+
+
+def render_no_trade(decision: LLMDecision, reason: str) -> None:
+    """Render a NO_TRADE outcome with reason."""
+    console.print(
+        Panel(
+            f"[yellow]{reason}[/yellow]\n[dim]{decision.thesis}[/dim]",
+            title="[bold yellow]NO TRADE[/bold yellow]",
+            border_style="yellow",
+            expand=False,
+        )
+    )
+
+
+def render_trade_plan(plan: TradePlan) -> None:
+    """Render the full operator-facing trade plan."""
+    color = "green" if plan.bias == "LONG" else "red"
+
+    header = Table(show_header=False, box=None)
+    header.add_row("Instrument", f"[bold]{plan.symbol}[/bold]")
+    header.add_row("Bias", f"[bold {color}]{plan.bias}[/bold {color}]")
+    header.add_row("Confidence", f"{plan.confidence}/100")
+    header.add_row("Setup", plan.setup_type)
+    header.add_row("", "")
+    header.add_row("Entry Zone", f"[bold]{plan.entry_min:.2f} – {plan.entry_max:.2f}[/bold]")
+    header.add_row("Stop Loss", f"[bold red]{plan.stop_loss:.2f}[/bold red]")
+    header.add_row("TP1", f"[bold green]{plan.take_profit_1:.2f}[/bold green]")
+    if plan.take_profit_2:
+        header.add_row("TP2", f"[bold green]{plan.take_profit_2:.2f}[/bold green]")
+    header.add_row("R:R", f"{plan.reward_risk_ratio:.1f}:1")
+    header.add_row("Max Hold", f"{plan.max_hold_minutes} min")
+    if plan.chase_above_below:
+        chase_label = "Chase Above" if plan.bias == "LONG" else "Chase Below"
+        header.add_row(chase_label, f"[dim]{plan.chase_above_below:.2f}[/dim]")
+
+    console.print(Panel(header, title=f"[bold {color}]SIGNAL — {plan.symbol}[/bold {color}]", border_style=color, expand=False))
+
+    console.print(Panel(plan.thesis, title="Thesis", border_style="dim", expand=False))
+
+    inst_text = "\n".join(f"  {i + 1}. {line}" for i, line in enumerate(plan.operator_instructions))
+    console.print(Panel(inst_text, title="[bold]Operator Instructions[/bold]", border_style="cyan", expand=False))
+
+    if plan.do_not_trade_if:
+        dnti_text = "\n".join(f"  • {c}" for c in plan.do_not_trade_if)
+        console.print(Panel(dnti_text, title="[bold yellow]Do Not Trade If[/bold yellow]", border_style="yellow", expand=False))
+
+    invalid_text = "\n".join(f"  • {c}" for c in plan.invalidation_conditions)
+    console.print(Panel(invalid_text, title="Invalidation Conditions", border_style="dim", expand=False))
 
