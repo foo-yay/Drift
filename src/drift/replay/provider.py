@@ -11,21 +11,33 @@ would return at that moment in time).
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
+from zoneinfo import ZoneInfo
 
 from drift.data.providers.base import MarketDataProvider
 from drift.models import Bar
 
+_ET = ZoneInfo("America/New_York")
+
+_RTH_OPEN = time(9, 30)   # 09:30 ET
+_RTH_CLOSE = time(16, 0)  # 16:00 ET
+_OVERNIGHT_START = time(18, 0)  # 18:00 ET — CME maintenance/overnight begins
+
 
 def _session_label(ts: datetime) -> str:
-    """Classify a UTC timestamp into a session label."""
-    # Convert to ET for session boundary checks.
-    # Simple UTC-based approximation — ET is UTC-4 (EDT) or UTC-5 (EST).
-    # For replay purposes a rough label is sufficient.
-    hour_et = (ts.hour - 4) % 24  # assume EDT
-    if 9 <= hour_et < 16:
+    """Classify a UTC timestamp into a session label.
+
+    Uses proper zoneinfo conversion so DST transitions are handled correctly.
+    Boundaries:
+        RTH       → 09:30–16:00 ET
+        PRE/POST  → 04:00–09:30 ET and 16:00–18:00 ET
+        OVERNIGHT → 18:00–04:00 ET (CME overnight / maintenance window)
+    """
+    et = ts.astimezone(_ET)
+    t = et.time().replace(second=0, microsecond=0)
+    if _RTH_OPEN <= t < _RTH_CLOSE:
         return "RTH"
-    if 18 <= hour_et < 24 or 0 <= hour_et < 4:
+    if t >= _OVERNIGHT_START or t < time(4, 0):
         return "OVERNIGHT"
     return "PRE/POST"
 
