@@ -106,9 +106,9 @@ class TradePlanBuilder:
     # ------------------------------------------------------------------
 
     def _resolve_atr(self, snapshot: MarketSnapshot) -> float:
-        """Pull ATR from snapshot market_note context or fall back to a safe default."""
-        # ATR isn't directly on the snapshot model yet; use a default.
-        # Future: add atr field to MarketSnapshot.
+        """Pull ATR from snapshot; fall back to 10 pts if not yet computed."""
+        if snapshot.atr is not None and snapshot.atr > 0:
+            return snapshot.atr
         return 10.0
 
     def _build_instructions(

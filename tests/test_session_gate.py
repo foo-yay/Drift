@@ -1,7 +1,7 @@
 """Tests for SessionGate.
 
-Socket the gate uses real ET wall-clock time, so we patch datetime.now()
-to control what time is returned for each case.
+The gate now reads snapshot.as_of instead of datetime.now(), so we inject
+the desired ET time directly into the snapshot's as_of field.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def _make_config(
     skip: int = 10,
 ) -> SessionsSection:
     if blocks is None:
-        blocks = [("09:40", "11:30"), ("13:30", "15:30")]
+        blocks = [("09:40", "15:30")]
     return SessionsSection(
         enabled=enabled,
         blocks=[SessionBlock(start=s, end=e) for s, e in blocks],
@@ -32,9 +32,9 @@ def _make_config(
     )
 
 
-def _make_snapshot(session: str = "open") -> MarketSnapshot:
+def _make_snapshot(session: str = "open", as_of: datetime | None = None) -> MarketSnapshot:
     return MarketSnapshot(
-        as_of=datetime.now(tz=ZoneInfo("UTC")),
+        as_of=as_of or datetime.now(tz=ZoneInfo("UTC")),
         symbol="MNQ",
         last_price=21_000.0,
         session=session,
@@ -95,15 +95,11 @@ class _ClockableSessionGate(SessionGate):
 
 
 def _evaluate_at(et_hour: int, et_minute: int, config: SessionsSection, session: str = "open"):
-    """Evaluate SessionGate with a fixed ET clock time."""
-    snapshot = _make_snapshot(session=session)
+    """Evaluate SessionGate with snapshot.as_of set to the given ET time."""
+    as_of = datetime(2026, 4, 14, et_hour, et_minute, 0, tzinfo=_ET)
+    snapshot = _make_snapshot(session=session, as_of=as_of)
     gate = SessionGate(config)
-
-    fixed = datetime(2026, 4, 14, et_hour, et_minute, 0, tzinfo=_ET)
-    with patch("drift.gates.session_gate.datetime") as mock_dt:
-        mock_dt.now.return_value = fixed
-        mock_dt.combine = datetime.combine
-        return gate.evaluate(snapshot)
+    return gate.evaluate(snapshot)
 
 
 class TestSessionGateDisabled:
@@ -158,34 +154,33 @@ class TestSessionGateSkipWindow:
 
 
 class TestSessionGateTradingBlocks:
-    def test_passes_inside_first_block(self):
+    def test_passes_inside_block(self):
         result = _evaluate_at(10, 30, _make_config())
         assert result.passed
         assert "09:40" in result.reason
 
-    def test_passes_inside_second_block(self):
+    def test_passes_through_midday(self):
+        """12:00 is inside the single continuous RTH block."""
+        result = _evaluate_at(12, 0, _make_config())
+        assert result.passed
+
+    def test_passes_in_afternoon(self):
         result = _evaluate_at(14, 0, _make_config())
         assert result.passed
-        assert "13:30" in result.reason
+        assert "09:40" in result.reason
 
     def test_passes_at_block_start_boundary(self):
         result = _evaluate_at(9, 40, _make_config())
         assert result.passed
 
     def test_passes_at_block_end_boundary(self):
-        result = _evaluate_at(11, 30, _make_config())
+        result = _evaluate_at(15, 30, _make_config())
         assert result.passed
 
-    def test_blocks_between_blocks(self):
-        """12:00 is between 11:30 and 13:30 — the lunch gap."""
-        result = _evaluate_at(12, 0, _make_config())
-        assert not result.passed
-        assert "12:00" in result.reason
-
-    def test_blocks_before_first_block(self):
+    def test_blocks_before_block(self):
         result = _evaluate_at(9, 15, _make_config(skip=0))
         assert not result.passed
 
-    def test_blocks_after_last_block(self):
+    def test_blocks_after_block(self):
         result = _evaluate_at(16, 0, _make_config())
         assert not result.passed

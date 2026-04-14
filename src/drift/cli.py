@@ -156,5 +156,127 @@ def resume(
         console.print("[dim]Kill switch was not active.[/dim]")
 
 
+@app.command()
+def replay(
+    config_path: Annotated[str, typer.Option("--config", help="Path to settings YAML.")] = (
+        "config/settings.yaml"
+    ),
+    start: Annotated[str, typer.Option("--start", help="Start date YYYY-MM-DD. Defaults to yesterday.")] = "",
+    end: Annotated[str, typer.Option("--end", help="End date YYYY-MM-DD. Defaults to yesterday.")] = "",
+    csv_1m: Annotated[str, typer.Option("--csv-1m", help="Path to pre-downloaded 1m bar CSV.")] = "",
+    csv_5m: Annotated[str, typer.Option("--csv-5m", help="Path to pre-downloaded 5m bar CSV.")] = "",
+    csv_1h: Annotated[str, typer.Option("--csv-1h", help="Path to pre-downloaded 1h bar CSV.")] = "",
+    step: Annotated[int, typer.Option("--step", help="Fire the pipeline every N 1m bars (default 15 = every 15 minutes).")] = 15,
+    disable_session_gate: Annotated[bool, typer.Option("--disable-session-gate", help="Allow signals outside RTH hours.")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", help="Print the full snapshot panel on each step.")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Use mock LLM — no API calls, no credits spent.")] = False,
+) -> None:
+    """Replay historical bars through the full Drift pipeline.
+
+    With no arguments, replays yesterday's session fetched from yfinance.
+
+    \b
+    Data source options:
+
+    \b
+    1. Default — yesterday from yfinance:
+         drift replay
+
+    \b
+    2. Specific date range from yfinance (last 7 days only for 1m):
+         drift replay --start 2026-04-10 --end 2026-04-11
+
+    \b
+    3. Pre-downloaded CSVs (no date limit):
+         drift replay --csv-1m data/MNQ_1m.csv --csv-5m data/MNQ_5m.csv --csv-1h data/MNQ_1h.csv
+    """
+    from datetime import date, timedelta
+
+    from drift.ai.client import LLMClient
+    from drift.ai.mock_client import MockLLMClient
+    from drift.output.console import render_replay_summary
+    from drift.replay.engine import ReplayEngine
+    from drift.replay.loader import fetch_bars_for_date_range, load_bars_from_csv
+
+    config = load_app_config(config_path)
+    symbol = config.instrument.symbol
+
+    import os
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if dry_run:
+        llm_client = MockLLMClient()
+        console.print("[yellow]DRY RUN — mock LLM active. No API credits will be spent.[/yellow]")
+    elif api_key:
+        llm_client = LLMClient(config.llm)
+    else:
+        llm_client = MockLLMClient()
+        console.print("[yellow]No ANTHROPIC_API_KEY found — using mock LLM. Signals are not real.[/yellow]")
+
+    # ------------------------------------------------------------------
+    # Load bars
+    # ------------------------------------------------------------------
+    use_csv = csv_1m or csv_5m or csv_1h
+    use_dates = start or end
+
+    if use_csv and use_dates:
+        console.print("[bold red]ERROR[/bold red] Provide either --start/--end or --csv-*, not both.")
+        raise typer.Exit(1)
+
+    if use_csv:
+        missing = [f for f, v in [("--csv-1m", csv_1m), ("--csv-5m", csv_5m), ("--csv-1h", csv_1h)] if not v]
+        if missing:
+            console.print(f"[bold red]ERROR[/bold red] Missing CSV paths: {', '.join(missing)}")
+            raise typer.Exit(1)
+        console.rule(f"[bold]Drift Replay — {symbol} (CSV)[/bold]")
+        try:
+            bars_1m, bars_5m, bars_1h = load_bars_from_csv(csv_1m, csv_5m, csv_1h, symbol)
+        except (FileNotFoundError, KeyError, ValueError) as exc:
+            console.print(f"[bold red]ERROR[/bold red] Failed to load CSVs: {exc}")
+            raise typer.Exit(1) from exc
+    else:
+        # Default: yesterday. Skip back over weekends (Sat→Fri, Sun→Fri).
+        if not start and not end:
+            yesterday = date.today() - timedelta(days=1)
+            if yesterday.weekday() == 5:   # Saturday
+                yesterday -= timedelta(days=1)
+            elif yesterday.weekday() == 6:  # Sunday
+                yesterday -= timedelta(days=2)
+            start = end = str(yesterday)
+
+        if not start or not end:
+            console.print("[bold red]ERROR[/bold red] Both --start and --end are required when fetching from yfinance.")
+            raise typer.Exit(1)
+        console.rule(f"[bold]Drift Replay — {symbol} ({start} → {end})[/bold]")
+        console.print("[dim]Fetching bars from yfinance...[/dim]")
+        try:
+            bars_1m, bars_5m, bars_1h = fetch_bars_for_date_range(symbol, start, end)
+        except ValueError as exc:
+            console.print(f"[bold red]ERROR[/bold red] {exc}")
+            raise typer.Exit(1) from exc
+
+    console.print(
+        f"Loaded [bold]{len(bars_1m)}[/bold] 1m bars, "
+        f"[bold]{len(bars_5m)}[/bold] 5m bars, "
+        f"[bold]{len(bars_1h)}[/bold] 1h bars"
+    )
+
+    # ------------------------------------------------------------------
+    # Run
+    # ------------------------------------------------------------------
+    engine = ReplayEngine(
+        config=config,
+        bars_1m=bars_1m,
+        bars_5m=bars_5m,
+        bars_1h=bars_1h,
+        llm_client=llm_client,
+        step_every_n_bars=step,
+        disable_session_gate=disable_session_gate,
+        verbose=verbose,
+    )
+
+    summary = engine.run()
+    render_replay_summary(summary)
+
+
 if __name__ == "__main__":
     app()

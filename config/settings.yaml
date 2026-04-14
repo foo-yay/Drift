@@ -14,8 +14,6 @@ sessions:
   enabled: true
   blocks:
     - start: "09:40"
-      end: "11:30"
-    - start: "13:30"
       end: "15:30"
   skip_first_n_minutes_after_open: 10
 
@@ -34,7 +32,7 @@ features:
   volume_spike_window: 20
 
 risk:
-  min_confidence: 65
+  min_confidence: 60
   min_reward_risk: 1.8
   max_signals_per_day: 3
   cooldown_minutes: 15

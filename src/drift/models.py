@@ -68,6 +68,7 @@ class MarketSnapshot(BaseModel):
     volatility_regime: str
     order_blocks: list[dict] = Field(default_factory=list)
     rejection_blocks: list[dict] = Field(default_factory=list)
+    atr: float | None = None
     market_note: str | None = None
 
 
@@ -131,4 +132,5 @@ class SignalEvent(BaseModel):
     trade_plan: dict[str, Any] | None = None
     final_outcome: str
     final_reason: str
+    replay_outcome: dict[str, Any] | None = None  # OutcomeResult if resolved during replay
 

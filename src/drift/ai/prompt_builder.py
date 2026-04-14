@@ -16,6 +16,7 @@ Rules:
 - Favor NO_TRADE when the setup is unclear, extended, conflicting, or has poor reward-to-risk.
 - Prefer continuation entries when trend and momentum align and extension risk is moderate.
 - Prefer failed_breakout_reversion only when rejection and structure are clear.
+- setup_type MUST be exactly one of: pullback_continuation, breakout_continuation, failed_breakout_reversion, no_trade. Do not invent other values.
 - Reject low-quality chop, late entries, and setups with ambiguous invalidation.
 - Be selective. Most cycles should return NO_TRADE.
 
@@ -24,7 +25,7 @@ You must return valid JSON matching this exact schema. No markdown, no extra tex
 {
   "decision": "LONG" | "SHORT" | "NO_TRADE",
   "confidence": <integer 0-100>,
-  "setup_type": "<string>",
+  "setup_type": "pullback_continuation" | "breakout_continuation" | "failed_breakout_reversion" | "no_trade",
   "thesis": "<string>",
   "entry_style": "buy_pullback" | "buy_breakout" | "sell_pullback" | "sell_breakout" | "no_entry",
   "entry_zone": [<low_price>, <high_price>],
@@ -33,7 +34,7 @@ You must return valid JSON matching this exact schema. No markdown, no extra tex
   "do_not_trade_if": ["<condition>", ...]
 }
 
-If decision is NO_TRADE, entry_zone should be [0.0, 0.0] and hold_minutes should be 0.
+If decision is NO_TRADE, set setup_type to "no_trade", entry_zone to [0.0, 0.0], and hold_minutes to 1.
 """
 
 
