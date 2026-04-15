@@ -315,9 +315,10 @@ def _render_status_panel(store) -> None:
 def _render_status_countdown(config, store, scheduler=None) -> None:
     """Live countdown fragment refreshing every 10 s.
 
-    Derives elapsed time from the most recent signal in the DB so the
-    countdown survives page navigation, manual Run Now clicks, and CLI
-    background cycles — no session_state monotonic timestamps needed.
+    Uses the scheduler's own last-run timestamp so that manual Run Now cycles
+    do not reset the loop timer — only scheduled cycles advance the clock.
+    Falls back to the DB if the scheduler hasn't fired yet (e.g. first load
+    with existing DB records from a prior ``drift run`` session).
     """
     @st.fragment(run_every=10)
     def _inner() -> None:
@@ -331,34 +332,37 @@ def _render_status_countdown(config, store, scheduler=None) -> None:
             )
             return
 
-        try:
-            recent = store.query(limit=1, order_desc=True)
-            last_sig = recent[0] if recent else None
-        except Exception:  # noqa: BLE001
-            last_sig = None
+        # Prefer the scheduler's own last-run time so Run Now doesn't reset
+        # the loop timer.  Fall back to the DB only if the scheduler thread
+        # hasn't completed a cycle yet this session.
+        last_ts: datetime | None = None
+        if scheduler is not None:
+            last_ts = scheduler.state.last_run_utc  # None until first scheduled cycle
 
-        if last_sig is None:
+        if last_ts is None:
+            # Scheduler hasn't fired yet — fall back to DB so existing history
+            # still drives a sensible countdown on first page load.
+            try:
+                recent = store.query(limit=1, order_desc=True)
+                sig = recent[0] if recent else None
+                if sig:
+                    candidate = datetime.fromisoformat(sig.event_time_utc)
+                    if candidate.tzinfo is None:
+                        candidate = candidate.replace(tzinfo=timezone.utc)
+                    last_ts = candidate
+            except Exception:  # noqa: BLE001
+                pass
+
+        if last_ts is None:
             st.markdown(
                 "<p style='margin:2px 0; color:#4caf50; font-size:0.85rem'>● Running — first cycle pending</p>",
                 unsafe_allow_html=True,
             )
             return
 
-        try:
-            last_ts = datetime.fromisoformat(last_sig.event_time_utc)
-            if last_ts.tzinfo is None:
-                last_ts = last_ts.replace(tzinfo=timezone.utc)
-            elapsed = (datetime.now(tz=timezone.utc) - last_ts).total_seconds()
-        except (ValueError, TypeError):
-            st.markdown(
-                "<p style='margin:2px 0; color:#4caf50; font-size:0.85rem'>● Ready</p>",
-                unsafe_allow_html=True,
-            )
-            return
-
+        elapsed   = (datetime.now(tz=timezone.utc) - last_ts).total_seconds()
         remaining = loop_secs - elapsed
         if remaining <= 0:
-            # Elapsed > full interval — cycle is overdue (scheduler is working on it)
             color, label = "#f5a623", "● Cycle running…"
         elif remaining < 30:
             mins = int(remaining) // 60
