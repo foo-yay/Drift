@@ -19,10 +19,14 @@ Layout
 """
 from __future__ import annotations
 
+import warnings
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import streamlit as st
+
+# Suppress yfinance/pandas deprecation noise that leaks into Streamlit logs.
+warnings.filterwarnings("ignore", message="Timestamp.utcnow")
 
 from drift.gui.components.candlestick import build_candlestick_chart
 from drift.gui.components.gate_status import render_gate_status, render_last_trade_plan
@@ -101,6 +105,15 @@ def _chart_fragment(symbol: str, tf: str, store) -> None:
 
         with st.spinner(f"Fetching {symbol} {tf} bars…"):
             bars = _fetch_bars(symbol, interval, lookback)
+
+        if not bars:
+            st.warning(
+                f"No {tf} bar data returned for **{symbol}**. "
+                "Yahoo Finance may be rate-limited or the market is closed. "
+                "The chart will auto-refresh in 15 min.",
+                icon="⚠️",
+            )
+            return
 
         # Signal markers: last 7 days from SQLite
         seven_days_ago = date.today() - timedelta(days=7)
@@ -194,8 +207,9 @@ def _open_store(config):
     return get_store(config)
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def _fetch_bars(symbol: str, interval: str, lookback: int):
-    """Fetch bars with a short Streamlit cache to avoid hammering yfinance."""
+    """Fetch bars; cached for 60 s to avoid hammering yfinance on every rerun."""
     from drift.data.providers.yfinance_provider import YFinanceProvider
     provider = YFinanceProvider()
     try:
