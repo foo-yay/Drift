@@ -252,6 +252,20 @@ def _render_status_panel(store) -> None:
         div[data-testid="stButton"] button {
             white-space: nowrap !important;
         }
+        /* Compact pill style for secondary (Details) buttons */
+        div[data-testid="stButton"] button:not([kind="primary"]) {
+            padding:       2px 12px !important;
+            font-size:     0.75rem !important;
+            border-radius: 1rem !important;
+            min-height:    1.65rem !important;
+            line-height:   1.65rem !important;
+            border-color:  #444 !important;
+            color:         #ccc !important;
+        }
+        div[data-testid="stButton"] button:not([kind="primary"]):hover {
+            border-color: #888 !important;
+            color:        #fff !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -335,7 +349,7 @@ def _render_cycle_row(sig, *, key: str, latest: bool) -> None:
         label_time = "—"
 
     badge_size = "0.9rem" if latest else "0.8rem"
-    col_badge, col_btn = st.columns([3, 1])
+    col_badge, col_btn = st.columns([5, 1])
     with col_badge:
         ts_size = "0.75rem" if not latest else "0.78rem"
         st.markdown(
@@ -346,7 +360,7 @@ def _render_cycle_row(sig, *, key: str, latest: bool) -> None:
             unsafe_allow_html=True,
         )
     with col_btn:
-        if st.button("Details", key=f"detail_{key}", use_container_width=True):
+        if st.button("Details", key=f"detail_{key}"):
             show_signal_detail(sig)
 
 
