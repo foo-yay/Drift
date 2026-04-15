@@ -135,7 +135,11 @@ def kill(
         "config/settings.yaml"
     ),
 ) -> None:
-    """Activate the kill switch — all signals will be blocked immediately."""
+    """[Deprecated] Activate the kill switch. Use 'drift gui' → Controls instead."""
+    console.print(
+        "[bold yellow]Deprecated:[/bold yellow] 'drift kill' will be removed in a future release. "
+        "Use [bold]drift gui[/bold] → Controls page to manage the kill switch."
+    )
     from pathlib import Path
 
     config = load_app_config(config_path)
@@ -152,7 +156,11 @@ def resume(
         "config/settings.yaml"
     ),
 ) -> None:
-    """Deactivate the kill switch — signals will resume on the next cycle."""
+    """[Deprecated] Deactivate the kill switch. Use 'drift gui' → Controls instead."""
+    console.print(
+        "[bold yellow]Deprecated:[/bold yellow] 'drift resume' will be removed in a future release. "
+        "Use [bold]drift gui[/bold] → Controls page to manage the kill switch."
+    )
     from pathlib import Path
 
     config = load_app_config(config_path)
@@ -334,10 +342,9 @@ def backfill_outcomes_cmd(
 def replay_gui() -> None:
     """[Deprecated] Launch the legacy Streamlit replay viewer. Use 'drift gui' instead."""
     console.print(
-        "[bold yellow]Warning:[/bold yellow] 'drift replay-gui' is deprecated. "
-        "Use [bold]drift gui[/bold] instead."
+        "[bold yellow]Deprecated:[/bold yellow] 'drift replay-gui' is deprecated and will be removed "
+        "in a future release. Use [bold]drift gui[/bold] → Replay Lab instead."
     )
-    _launch_streamlit(Path(__file__).parent / "replay" / "streamlit_app.py")
 
 
 @app.command("gui")
