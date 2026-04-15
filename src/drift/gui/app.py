@@ -36,11 +36,11 @@ st.set_page_config(
 # ---------------------------------------------------------------------------
 
 _pages = [
-    st.Page(live_monitor.page,   title="Live Monitor",   icon="📡", default=True),
-    st.Page(signal_history.page, title="Signal History", icon="📋"),
-    st.Page(replay_lab.page,     title="Replay Lab",     icon="🔄"),
-    st.Page(controls.page,       title="Controls",       icon="⚙️"),
-    st.Page(settings.page,       title="Settings",       icon="🔧"),
+    st.Page(live_monitor.page,   title="Live Monitor",   icon="📡", url_path="live",    default=True),
+    st.Page(signal_history.page, title="Signal History", icon="📋", url_path="history"),
+    st.Page(replay_lab.page,     title="Replay Lab",     icon="🔄", url_path="replay"),
+    st.Page(controls.page,       title="Controls",       icon="⚙️", url_path="controls"),
+    st.Page(settings.page,       title="Settings",       icon="🔧", url_path="settings"),
 ]
 
 # ---------------------------------------------------------------------------
