@@ -136,7 +136,7 @@ st.divider()
 
 selected_idx = st.session_state.get("selected_idx")
 fig = build_chart(bars_1m, summary.events, selected_idx)
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # ------------------------------------------------------------------
 # Signal table + detail panel
@@ -151,7 +151,7 @@ if df.empty:
 st.subheader(f"Signals ({len(df)})")
 selection = st.dataframe(
     df,
-    use_container_width=True,
+    width="stretch",
     selection_mode="single-row",
     on_select="rerun",
     key="signal_table",
