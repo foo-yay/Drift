@@ -11,6 +11,12 @@ from __future__ import annotations
 from datetime import date, timedelta
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# Load .env before any module that reads ANTHROPIC_API_KEY.
+# Streamlit runs this file directly (bypassing cli.py where load_dotenv() normally fires).
+load_dotenv()
+
 import streamlit as st
 
 from drift.replay.chart import build_chart, events_to_df
