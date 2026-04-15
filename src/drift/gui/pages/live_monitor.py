@@ -417,7 +417,6 @@ def _run_cycle_now(config) -> None:
     st.session_state["_run_outcome"]     = outcome
     st.session_state["_run_error"]       = error_msg
     st.session_state["_show_run_output"] = True
-    st.session_state["_last_cycle_wall_ts"] = time.monotonic()  # reset countdown
     st.cache_resource.clear()  # force store to re-open on rerun
     st.rerun()  # re-render page so panel picks up new signal + dialog opens
 
