@@ -252,19 +252,20 @@ def _render_status_panel(store) -> None:
         div[data-testid="stButton"] button {
             white-space: nowrap !important;
         }
-        /* Compact pill style for secondary (Details) buttons */
+        /* Details link-style buttons inside cycle rows */
         div[data-testid="stButton"] button:not([kind="primary"]) {
-            padding:       2px 12px !important;
+            background:    transparent !important;
+            border:        none !important;
+            padding:       0 4px !important;
             font-size:     0.75rem !important;
-            border-radius: 1rem !important;
-            min-height:    1.65rem !important;
-            line-height:   1.65rem !important;
-            border-color:  #444 !important;
-            color:         #ccc !important;
+            color:         #888 !important;
+            text-decoration: underline !important;
+            min-height:    unset !important;
+            line-height:   1.4 !important;
+            box-shadow:    none !important;
         }
         div[data-testid="stButton"] button:not([kind="primary"]):hover {
-            border-color: #888 !important;
-            color:        #fff !important;
+            color: #ccc !important;
         }
         </style>
         """,
@@ -349,7 +350,7 @@ def _render_cycle_row(sig, *, key: str, latest: bool) -> None:
         label_time = "—"
 
     badge_size = "0.9rem" if latest else "0.8rem"
-    col_badge, col_btn = st.columns([5, 1])
+    col_badge, col_btn = st.columns([5, 1], vertical_alignment="center")
     with col_badge:
         ts_size = "0.75rem" if not latest else "0.78rem"
         st.markdown(
@@ -420,7 +421,7 @@ def _run_cycle_now(config) -> None:
     outcome  = "success"
     error_msg = ""
     try:
-        app = DriftApplication(abs_config, config_path=config_path, sandbox=sandbox)
+        app = DriftApplication(abs_config, config_path=config_path, sandbox=sandbox, manual_run=not sandbox)
         with st.spinner("Running analysis cycle…"):
             app.run_once()
     except Exception as exc:  # noqa: BLE001

@@ -33,7 +33,7 @@ from drift.storage.logger import EventLogger
 
 
 class DriftApplication:
-    def __init__(self, config: AppConfig, config_path: str, sandbox: bool = False) -> None:
+    def __init__(self, config: AppConfig, config_path: str, sandbox: bool = False, manual_run: bool = False) -> None:
         self.config = config
         self.config_path = config_path
         self._sandbox = sandbox
@@ -52,8 +52,14 @@ class DriftApplication:
         # In sandbox mode disable the session gate so signals flow through
         # regardless of time of day, and disable the cooldown gate so repeated
         # test runs aren't blocked by prior signal history.
+        # Manual runs (Run Now) also skip the cooldown gate — the operator
+        # is deliberately triggering the cycle so cooldown is not meaningful.
         sessions_cfg = config.sessions.model_copy(update={"enabled": False}) if sandbox else config.sessions
-        cooldown_cfg = config.gates.model_copy(update={"cooldown_enabled": False}) if sandbox else config.gates
+        cooldown_cfg = (
+            config.gates.model_copy(update={"cooldown_enabled": False})
+            if (sandbox or manual_run)
+            else config.gates
+        )
 
         self._gate_runner = GateRunner([
             KillSwitchGate(config.gates),
