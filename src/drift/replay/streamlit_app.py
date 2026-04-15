@@ -40,7 +40,7 @@ _CONFIG_PATH = Path(__file__).parents[3] / "config" / "settings.yaml"
 # Cached data loading
 # ------------------------------------------------------------------
 
-@st.cache_data(show_spinner="Fetching bars and running replay…")
+@st.cache_resource(show_spinner="Fetching bars and running replay…")
 def _run_replay(
     symbol: str,
     start: date,
