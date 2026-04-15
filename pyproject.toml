@@ -17,6 +17,8 @@ dependencies = [
   "yfinance>=0.2.50,<1",
   "certifi>=2024.0,<2026",
   "anthropic>=0.95,<2",
+  "streamlit>=1.35,<2",
+  "plotly>=5.22,<6",
 ]
 
 [project.optional-dependencies]

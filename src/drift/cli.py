@@ -284,5 +284,20 @@ def replay(
         console.print(f"[green]CSV exported → {export_csv}[/green]")
 
 
+@app.command("replay-gui")
+def replay_gui() -> None:
+    """Launch the Streamlit visual replay frontend in a local browser."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    app_path = Path(__file__).parent / "replay" / "streamlit_app.py"
+    result = subprocess.run(
+        [sys.executable, "-m", "streamlit", "run", str(app_path)],
+        check=False,
+    )
+    raise typer.Exit(result.returncode)
+
+
 if __name__ == "__main__":
     app()
