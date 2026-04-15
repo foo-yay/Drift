@@ -152,24 +152,34 @@ def build_chart(
 
 
 def events_to_df(events: list[SignalEvent]) -> pd.DataFrame:
-    """Convert TRADE_PLAN_ISSUED events to a display-ready DataFrame."""
+    """Convert TRADE_PLAN_ISSUED events to a display-ready DataFrame.
+
+    Only events that have a resolved replay_outcome are included.  Events
+    logged by the live runner (``drift run``) have no outcome because the
+    trade has not yet closed; they are excluded from the table.
+    """
     rows = []
     for e in events:
-        if e.final_outcome != "TRADE_PLAN_ISSUED" or not e.trade_plan:
+        if e.final_outcome != "TRADE_PLAN_ISSUED" or not e.trade_plan or not e.replay_outcome:
             continue
         tp = e.trade_plan
-        out = e.replay_outcome or {}
+        out = e.replay_outcome
         rows.append({
             "Time (ET)": e.event_time.astimezone(_ET).strftime("%Y-%m-%d %H:%M"),
             "Bias": tp.get("bias"),
             "Setup": tp.get("setup_type"),
             "Conf": tp.get("confidence"),
-            "Entry": f"{tp.get('entry_min', 0):.1f} – {tp.get('entry_max', 0):.1f}",
+            "Entry": f"{tp.get('entry_min', 0):.1f} \u2013 {tp.get('entry_max', 0):.1f}",
             "Stop": tp.get("stop_loss"),
             "TP1": tp.get("take_profit_1"),
             "R:R": tp.get("reward_risk_ratio"),
-            "Outcome": out.get("outcome", "—"),
-            "PnL (pts)": out.get("pnl_points", "—"),
-            "Min": out.get("minutes_elapsed", "—"),
+            "Outcome": out.get("outcome") or "",
+            "PnL (pts)": float(out["pnl_points"]) if "pnl_points" in out else None,
+            "Min": int(out["minutes_elapsed"]) if "minutes_elapsed" in out else None,
         })
-    return pd.DataFrame(rows)
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["PnL (pts)"] = pd.to_numeric(df["PnL (pts)"], errors="coerce").astype("float64")
+    df["Min"] = pd.to_numeric(df["Min"], errors="coerce").astype("Int64")
+    return df

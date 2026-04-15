@@ -159,3 +159,28 @@ def fetch_bars_for_date_range(
         )
 
     return bars_1m, bars_5m, bars_1h
+
+
+def save_bars_to_csv(
+    bars: list[Bar],
+    path: str | Path,
+) -> None:
+    """Write a bar list to a CSV file readable by ``load_bars_from_csv``.
+
+    Columns: timestamp (ISO-8601 UTC), open, high, low, close, volume
+    Creates parent directories as needed.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=["timestamp", "open", "high", "low", "close", "volume"])
+        writer.writeheader()
+        for b in bars:
+            writer.writerow({
+                "timestamp": b.timestamp.strftime("%Y-%m-%dT%H:%M:%S+00:00"),
+                "open": b.open,
+                "high": b.high,
+                "low": b.low,
+                "close": b.close,
+                "volume": b.volume,
+            })
