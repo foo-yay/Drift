@@ -519,65 +519,18 @@ def _compute_overlay_data(
     want_vwap: bool,
     want_obs: bool,
 ) -> dict:
-    """Compute overlay values from the visible bars + most recent stored snapshot.
+    """Fetch overlay data needed by the chart builder.
 
-    EMA and VWAP are derived from the currently fetched bars so they always
-    align with what's on screen.  Order/rejection blocks come from the last
-    stored MarketSnapshot (they require the full FeatureEngine run).
+    EMAs and VWAP are computed inside ``build_candlestick_chart`` directly
+    from the bars, so this function only needs to supply order/rejection block
+    zones from the most recent stored MarketSnapshot.
     """
-    import pandas as pd
-    from zoneinfo import ZoneInfo as _ZI
-
     od: dict = {}
-    if not bars:
-        return od
-
-    _ETZ = _ZI("America/New_York")
-
-    # Build a close/volume series from the bars list
-    closes  = [b.close  for b in bars]
-    highs   = [b.high   for b in bars]
-    lows    = [b.low    for b in bars]
-    volumes = [b.volume for b in bars]
-    ts_list = [b.timestamp for b in bars]
-
-    closes_s  = pd.Series(closes,  dtype=float)
-    volumes_s = pd.Series(volumes, dtype=float)
-
-    if want_emas:
-        for period in (9, 21, 50):
-            if len(closes_s) >= period:
-                ema_val = float(closes_s.ewm(span=period, adjust=False).mean().iloc[-1])
-                od[f"ema_{period}"] = ema_val
-
-    if want_vwap:
-        # Session VWAP — filter to today's RTH bars (9:30 ET onward)
-        import datetime as _dt
-        today_et = _dt.date.today()
-        rth_open_utc = _dt.datetime(
-            today_et.year, today_et.month, today_et.day,
-            14, 30,  # 09:30 ET = 14:30 UTC
-            tzinfo=_dt.timezone.utc,
-        )
-        tp = 0.0
-        vol_cum = 0.0
-        for i, b in enumerate(bars):
-            bar_ts = b.timestamp
-            if bar_ts.tzinfo is None:
-                bar_ts = bar_ts.replace(tzinfo=_dt.timezone.utc)
-            if bar_ts >= rth_open_utc:
-                typical = (b.high + b.low + b.close) / 3
-                tp      += typical * b.volume
-                vol_cum += b.volume
-        if vol_cum > 0:
-            od["vwap"] = tp / vol_cum
-
     if want_obs and signals:
         latest_snap = next((s.snapshot for s in signals if s.snapshot), None)
         if latest_snap:
             od["order_blocks"]     = latest_snap.get("order_blocks", [])
             od["rejection_blocks"] = latest_snap.get("rejection_blocks", [])
-
     return od
 
 

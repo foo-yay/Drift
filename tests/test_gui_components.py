@@ -189,49 +189,59 @@ class TestOverlays:
             assert "VWAP" not in name
 
     def test_ema_traces_added_when_flag_set(self) -> None:
-        bars = self._bars(30)
-        od = {"ema_9": 21000.0, "ema_21": 20990.0, "ema_50": 20970.0}
-        fig = build_candlestick_chart(bars, [], show_emas=True, overlay_data=od)
+        # Need enough bars to compute EMAs (at least 50)
+        bars = self._bars(60)
+        fig = build_candlestick_chart(bars, [], show_emas=True)
         scatter_names = [t.name for t in fig.data if type(t).__name__ == "Scatter"]
         assert "EMA 9" in scatter_names
         assert "EMA 21" in scatter_names
         assert "EMA 50" in scatter_names
 
-    def test_missing_ema_value_skipped(self) -> None:
-        """If a period's value is missing from overlay_data, no trace is added for it."""
-        bars = self._bars(30)
-        od = {"ema_9": 21000.0}      # only period 9 present
-        fig = build_candlestick_chart(bars, [], show_emas=True, overlay_data=od)
-        scatter_names = [t.name for t in fig.data if type(t).__name__ == "Scatter"]
-        assert "EMA 9" in scatter_names
-        assert "EMA 21" not in scatter_names
-        assert "EMA 50" not in scatter_names
+    def test_ema_series_has_one_value_per_bar(self) -> None:
+        """EMA traces must have the same length as the bars list."""
+        bars = self._bars(60)
+        fig = build_candlestick_chart(bars, [], show_emas=True)
+        ema9 = next(t for t in fig.data if type(t).__name__ == "Scatter" and t.name == "EMA 9")
+        assert len(ema9.y) == len(bars)
 
     def test_ema_flag_false_suppresses_traces(self) -> None:
-        """Even with overlay_data populated, EMA traces are skipped if flag is False."""
-        bars = self._bars(30)
-        od = {"ema_9": 21000.0, "ema_21": 20990.0, "ema_50": 20970.0}
-        fig = build_candlestick_chart(bars, [], show_emas=False, overlay_data=od)
+        bars = self._bars(60)
+        fig = build_candlestick_chart(bars, [], show_emas=False)
         scatter_names = [t.name for t in fig.data if type(t).__name__ == "Scatter"]
         assert "EMA 9" not in scatter_names
 
     def test_vwap_trace_added_when_flag_set(self) -> None:
-        bars = self._bars()
-        od = {"vwap": 21002.5}
-        fig = build_candlestick_chart(bars, [], show_vwap=True, overlay_data=od)
+        # Bars must fall on or after 14:30 UTC (RTH open) for VWAP to appear
+        from datetime import timezone
+        bars = [
+            Bar(
+                timestamp=_TS + timedelta(minutes=i * 5),
+                open=21000.0, high=21010.0, low=20990.0, close=21005.0,
+                volume=1000.0, timeframe="5m", symbol="MNQ",
+            )
+            for i in range(10)
+        ]
+        fig = build_candlestick_chart(bars, [], show_vwap=True)
         scatter_names = [t.name for t in fig.data if type(t).__name__ == "Scatter"]
         assert "VWAP" in scatter_names
 
-    def test_vwap_skipped_when_value_missing(self) -> None:
-        bars = self._bars()
-        fig = build_candlestick_chart(bars, [], show_vwap=True, overlay_data={})
-        scatter_names = [t.name for t in fig.data if type(t).__name__ == "Scatter"]
-        assert "VWAP" not in scatter_names
+    def test_vwap_series_grows_with_bars(self) -> None:
+        """Each VWAP point must be a cumulative average — strictly non-trivial length."""
+        bars = [
+            Bar(
+                timestamp=_TS + timedelta(minutes=i * 5),
+                open=21000.0, high=21010.0, low=20990.0, close=21005.0,
+                volume=1000.0, timeframe="5m", symbol="MNQ",
+            )
+            for i in range(10)
+        ]
+        fig = build_candlestick_chart(bars, [], show_vwap=True)
+        vwap_trace = next(t for t in fig.data if type(t).__name__ == "Scatter" and t.name == "VWAP")
+        assert len(vwap_trace.y) == len(bars)
 
     def test_vwap_flag_false_suppresses_trace(self) -> None:
         bars = self._bars()
-        od = {"vwap": 21002.5}
-        fig = build_candlestick_chart(bars, [], show_vwap=False, overlay_data=od)
+        fig = build_candlestick_chart(bars, [], show_vwap=False)
         scatter_names = [t.name for t in fig.data if type(t).__name__ == "Scatter"]
         assert "VWAP" not in scatter_names
 

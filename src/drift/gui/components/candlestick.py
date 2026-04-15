@@ -177,32 +177,53 @@ def build_candlestick_chart(
         _add_signal_trace(fig, groups["OTHER"], "No-Trade / Blocked", _NEUTRAL_MARKER)
 
     # -- Overlays -------------------------------------------------------
+    # EMA and VWAP series are computed from the bars list directly so that
+    # the lines follow price action across the chart, not flat horizontals.
     od = overlay_data or {}
-    x_range = [_to_et(bars[0].timestamp), _to_et(bars[-1].timestamp)] if bars else None
 
-    if show_emas and x_range:
+    if show_emas and bars:
+        import pandas as pd
+        closes_s = pd.Series([b.close for b in bars], dtype=float)
+        ts_et = [_to_et(b.timestamp) for b in bars]
         for period, colour in _EMA_COLOURS.items():
-            val = od.get(f"ema_{period}")
-            if val is not None:
+            if len(closes_s) >= period:
+                ema_vals = closes_s.ewm(span=period, adjust=False).mean().tolist()
                 fig.add_trace(go.Scatter(
-                    x=x_range,
-                    y=[float(val), float(val)],
+                    x=ts_et,
+                    y=ema_vals,
                     mode="lines",
                     name=f"EMA {period}",
-                    line=dict(color=colour, width=1.5, dash="solid"),
-                    hovertemplate=f"EMA {period}: {float(val):,.2f}<extra></extra>",
+                    line=dict(color=colour, width=1.5),
+                    hovertemplate=f"EMA {period}: %{{y:,.2f}}<extra></extra>",
                 ))
 
-    if show_vwap and x_range:
-        vwap = od.get("vwap")
-        if vwap is not None:
+    if show_vwap and bars:
+        import datetime as _dt
+        rth_open_utc = _dt.datetime(
+            _dt.date.today().year, _dt.date.today().month, _dt.date.today().day,
+            14, 30, tzinfo=timezone.utc,  # 09:30 ET = 14:30 UTC
+        )
+        vwap_ts: list = []
+        vwap_vals: list = []
+        cum_tp_vol = 0.0
+        cum_vol = 0.0
+        for b in bars:
+            bar_ts = b.timestamp if b.timestamp.tzinfo else b.timestamp.replace(tzinfo=timezone.utc)
+            if bar_ts < rth_open_utc:
+                continue
+            cum_tp_vol += (b.high + b.low + b.close) / 3 * b.volume
+            cum_vol    += b.volume
+            if cum_vol > 0:
+                vwap_ts.append(_to_et(bar_ts))
+                vwap_vals.append(cum_tp_vol / cum_vol)
+        if vwap_ts:
             fig.add_trace(go.Scatter(
-                x=x_range,
-                y=[float(vwap), float(vwap)],
+                x=vwap_ts,
+                y=vwap_vals,
                 mode="lines",
                 name="VWAP",
                 line=dict(color=_VWAP_COLOUR, width=2, dash="dash"),
-                hovertemplate=f"VWAP: {float(vwap):,.2f}<extra></extra>",
+                hovertemplate="VWAP: %{y:,.2f}<extra></extra>",
             ))
 
     if show_order_blocks and bars:
