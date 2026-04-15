@@ -80,6 +80,8 @@ class GatesSection(BaseModel):
     cooldown_enabled: bool
     kill_switch_enabled: bool
     kill_switch_path: str
+    news_gate_enabled: bool = True
+    news_blackout_minutes: int = Field(default=30, ge=0)
 
 
 class RiskSection(BaseModel):
@@ -115,6 +117,9 @@ class LLMSection(BaseModel):
     timeout_seconds: int = Field(gt=0)
     max_retries: int = Field(ge=0)
     api_key_env: str = "ANTHROPIC_API_KEY"
+    performance_context_enabled: bool = True
+    performance_context_lookback_days: int = Field(default=30, ge=1)
+    few_shot_examples: int = Field(default=2, ge=0, le=10)
 
 
 class StorageSection(BaseModel):

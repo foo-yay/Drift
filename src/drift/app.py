@@ -11,6 +11,7 @@ from drift.features.engine import FeatureEngine
 from drift.gates.calendar_gate import CalendarGate
 from drift.gates.cooldown_gate import CooldownGate
 from drift.gates.kill_switch_gate import KillSwitchGate
+from drift.gates.news_gate import NewsGate
 from drift.gates.regime_gate import RegimeGate
 from drift.gates.runner import GateRunner
 from drift.gates.session_gate import SessionGate
@@ -51,10 +52,13 @@ class DriftApplication:
             KillSwitchGate(config.gates),
             SessionGate(sessions_cfg),
             CalendarGate(config.calendar),
+            NewsGate(config.gates),
             RegimeGate(config.gates),
             CooldownGate(cooldown_cfg, config.risk, config.storage.jsonl_event_log),
         ])
-        self._llm_client = MockLLMClient() if dry_run else LLMClient(config.llm)
+        self._llm_client = MockLLMClient() if dry_run else LLMClient(
+            config.llm, log_path=config.storage.jsonl_event_log
+        )
         self._plan_builder = TradePlanBuilder(config)
 
     def run_once(self) -> None:
