@@ -89,8 +89,11 @@ class YFinanceProvider(MarketDataProvider):
         days = _calendar_days_needed(timeframe, lookback)
         ticker = self._get_ticker(symbol)
 
+        end_dt = datetime.now(tz=timezone.utc)
+        start_dt = end_dt - timedelta(days=days)
         df = ticker.history(
-            period=f"{days}d",
+            start=start_dt,
+            end=end_dt,
             interval=_TIMEFRAME_TO_INTERVAL[timeframe],
             auto_adjust=True,
         )

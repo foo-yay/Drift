@@ -114,7 +114,7 @@ def _chart_fragment(symbol: str, tf: str, store) -> None:
         # Offer click-to-detail via plotly selected point → session state
         selected = st.plotly_chart(
             fig,
-            use_container_width=True,
+            width="stretch",
             on_select="rerun",
             key=f"chart_{tf}",
         )
