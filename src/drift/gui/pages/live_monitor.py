@@ -19,6 +19,7 @@ Layout
 """
 from __future__ import annotations
 
+import io
 import warnings
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -77,6 +78,10 @@ def page() -> None:
 
     symbol     = config.instrument.symbol
     filter_ctry = list(getattr(config.calendar, "filter_countries", ["USD"]))
+
+    # Show Run Now output dialog if a cycle just completed
+    if st.session_state.get("_show_run_output"):
+        _show_cycle_output_dialog()
 
     # ------------------------------------------------------------------
     # Timeframe + range selectors (outside the fragment — trigger re-fetch)
@@ -251,7 +256,7 @@ def _render_status_panel(store) -> None:
         st.caption("● Status unknown")
 
     if run_clicked:
-        _run_cycle_now(config, store)
+        _run_cycle_now(config)
 
     st.divider()
 
@@ -265,23 +270,63 @@ def _render_status_panel(store) -> None:
     render_last_trade_plan(last_sig)
 
 
-def _run_cycle_now(config, store) -> None:
-    """Run a single DriftApplication cycle immediately and refresh the panel."""
+@st.dialog("Run Now — Cycle Output", width="large")
+def _show_cycle_output_dialog() -> None:
+    """Modal showing full Rich console output from the last ad-hoc cycle."""
+    outcome = st.session_state.get("_run_outcome", "")
+    output  = st.session_state.get("_run_output", "")
+    error   = st.session_state.get("_run_error", "")
+
+    if outcome == "success":
+        st.success("Cycle completed — results saved to signal store.", icon="✅")
+    elif outcome == "error":
+        st.error(f"Cycle failed: {error}", icon="🚨")
+
+    if output:
+        st.code(output, language=None)
+    else:
+        st.caption("No output captured.")
+
+    if st.button("Close", key="close_run_dialog", type="secondary"):
+        st.session_state.pop("_show_run_output", None)
+        st.rerun()
+
+
+def _run_cycle_now(config) -> None:
+    """Run a single DriftApplication cycle, capture Rich output, show dialog."""
+    import drift.output.console as console_mod
+    from rich.console import Console
     from drift.app import DriftApplication
     from drift.gui.state import project_root
 
     config_path = str(project_root() / "config" / "settings.yaml")
     sandbox = getattr(getattr(config, "app", None), "mode", "") == "sandbox"
 
+    # Redirect the module-level Rich console to a buffer for the duration of the run.
+    buf = io.StringIO()
+    capture_console = Console(file=buf, force_terminal=False, no_color=True, width=100)
+    orig_console = console_mod.console
+    console_mod.console = capture_console
+
+    outcome  = "success"
+    error_msg = ""
     try:
         app = DriftApplication(config, config_path=config_path, sandbox=sandbox)
         with st.spinner("Running analysis cycle…"):
             app.run_once()
-        st.toast("✅ Cycle complete — results saved to store.", icon="✅")
-        # Bust the store cache so the panel immediately shows the new signal
-        st.cache_resource.clear()
     except Exception as exc:  # noqa: BLE001
-        st.error(f"Run failed: {exc}", icon="🚨")
+        outcome  = "error"
+        error_msg = str(exc)
+    finally:
+        # Always restore the original console before any rerun.
+        console_mod.console = orig_console
+
+    st.session_state["_run_output"]      = buf.getvalue()
+    st.session_state["_run_outcome"]     = outcome
+    st.session_state["_run_error"]       = error_msg
+    st.session_state["_show_run_output"] = True
+    st.cache_resource.clear()  # force store to re-open on rerun
+    st.rerun()  # re-render page so panel picks up new signal + dialog opens
 
 
 # ---------------------------------------------------------------------------
