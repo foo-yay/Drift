@@ -140,7 +140,7 @@ def page() -> None:
         # Build LLM client
         if use_real_llm:
             from drift.ai.client import LLMClient  # type: ignore[import]
-            llm_client = LLMClient(config)
+            llm_client = LLMClient(config.llm)
         else:
             from drift.ai.mock_client import MockLLMClient
             llm_client = MockLLMClient()
