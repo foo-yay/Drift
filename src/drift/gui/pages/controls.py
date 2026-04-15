@@ -133,32 +133,90 @@ def page() -> None:
     st.divider()
 
     # ------------------------------------------------------------------
-    # Scheduler status
+    # Scheduler status  (auto-refreshes every 10 s)
     # ------------------------------------------------------------------
     st.subheader("Scheduler")
 
-    try:
-        from drift.gui.scheduler import ensure_scheduler_running
-        scheduler = ensure_scheduler_running()
-        alive = scheduler.is_alive()
-        snap  = scheduler.state.snapshot()
+    @st.fragment(run_every=10)
+    def _scheduler_panel() -> None:
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        _ET = ZoneInfo("America/New_York")
 
-        if alive:
+        try:
+            from drift.gui.scheduler import ensure_scheduler_running
+            scheduler = ensure_scheduler_running()
+            alive = scheduler.is_alive()
+            snap  = scheduler.state.snapshot()
+        except Exception as exc:  # noqa: BLE001
+            st.caption(f"Scheduler status unavailable: {exc}")
+            return
+
+        # ── Health badge ──────────────────────────────────────────────
+        if snap["running"]:
+            st.warning("⏳ Cycle in progress…", icon=None)
+        elif alive:
             st.success("● Scheduler running", icon="✅")
         else:
             st.error("● Scheduler stopped — restart `drift gui` to recover", icon="🚨")
 
-        c1, c2 = st.columns(2)
-        last_run = snap["last_run_utc"]
-        c1.metric(
-            "Last scheduled cycle",
-            last_run.strftime("%H:%M ET") if last_run else "—",
-        )
-        c2.metric("Last outcome", snap["last_outcome"] or "—")
+        # ── Metric row ────────────────────────────────────────────────
+        now_utc   = datetime.now(tz=timezone.utc)
+        last_run  = snap["last_run_utc"]
+        next_run  = snap["next_run_utc"]
+
+        def _fmt_et(ts: datetime | None) -> str:
+            if ts is None:
+                return "—"
+            return ts.astimezone(_ET).strftime("%b %-d, %H:%M:%S ET")
+
+        def _elapsed(ts: datetime | None) -> str:
+            if ts is None:
+                return ""
+            secs = int((now_utc - ts).total_seconds())
+            if secs < 60:
+                return f"{secs}s ago"
+            mins, s = divmod(secs, 60)
+            if mins < 60:
+                return f"{mins}m {s:02d}s ago"
+            h, m = divmod(mins, 60)
+            return f"{h}h {m:02d}m ago"
+
+        def _countdown(ts: datetime | None) -> str:
+            if ts is None:
+                return ""
+            secs = int((ts - now_utc).total_seconds())
+            if secs <= 0:
+                return "overdue"
+            if secs < 60:
+                return f"in {secs}s"
+            mins, s = divmod(secs, 60)
+            return f"in {mins}m {s:02d}s"
+
+        outcome = snap["last_outcome"]
+        outcome_display = {"success": "✅ Success", "error": "❌ Error"}.get(outcome, outcome or "—")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Last cycle", _fmt_et(last_run), delta=_elapsed(last_run), delta_color="off")
+        c2.metric("Next cycle", _fmt_et(next_run), delta=_countdown(next_run), delta_color="off")
+        c3.metric("Outcome", outcome_display)
+        c4.metric("Cycles run", snap["cycle_count"])
+
+        # ── Error detail ──────────────────────────────────────────────
         if snap["last_error"]:
-            st.caption(f"Error: {snap['last_error']}")
-    except Exception as exc:  # noqa: BLE001
-        st.caption(f"Scheduler status unavailable: {exc}")
+            st.error(f"Last error: {snap['last_error']}", icon="🚨")
+
+        # ── Interval info ─────────────────────────────────────────────
+        try:
+            cfg = _load_config()
+            interval = cfg.app.loop_interval_seconds
+            mins, secs = divmod(interval, 60)
+            interval_str = f"{mins}m" if secs == 0 else f"{mins}m {secs}s"
+            st.caption(f"Loop interval: {interval_str}  ·  Timestamps in ET  ·  Refreshes every 10 s")
+        except Exception:  # noqa: BLE001
+            pass
+
+    _scheduler_panel()
 
 
 def _run_cycle(config) -> None:

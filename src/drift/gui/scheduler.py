@@ -19,7 +19,7 @@ import io
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import streamlit as st
@@ -32,9 +32,11 @@ class _SchedulerState:
 
     def __init__(self) -> None:
         self.last_run_utc: datetime | None = None
+        self.next_run_utc: datetime | None = None
         self.last_outcome: str = ""          # "success" | "error" | ""
         self.last_error: str = ""
         self.running: bool = False
+        self.cycle_count: int = 0
         self._lock = threading.Lock()
 
     # Thread-safe snapshot for the GUI to read.
@@ -42,9 +44,11 @@ class _SchedulerState:
         with self._lock:
             return {
                 "last_run_utc": self.last_run_utc,
+                "next_run_utc": self.next_run_utc,
                 "last_outcome": self.last_outcome,
                 "last_error":   self.last_error,
                 "running":      self.running,
+                "cycle_count":  self.cycle_count,
             }
 
     def record_run(self, outcome: str, error: str = "") -> None:
@@ -53,10 +57,13 @@ class _SchedulerState:
             self.last_outcome = outcome
             self.last_error   = error
             self.running      = False
+            self.cycle_count += 1
 
-    def mark_running(self) -> None:
+    def mark_running(self, next_run_utc: datetime | None = None) -> None:
         with self._lock:
             self.running = True
+            if next_run_utc is not None:
+                self.next_run_utc = next_run_utc
 
 
 class BackgroundScheduler:
@@ -91,6 +98,8 @@ class BackgroundScheduler:
         time.sleep(5)
         while True:
             self._run_cycle()
+            next_run = datetime.now(tz=timezone.utc) + timedelta(seconds=self._interval)
+            self.state.next_run_utc = next_run
             time.sleep(self._interval)
 
     def _run_cycle(self) -> None:
