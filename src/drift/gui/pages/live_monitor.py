@@ -232,8 +232,8 @@ def _render_status_panel(store) -> None:
     # Header
     st.markdown("**Engine Status**")
 
-    # Inject CSS once: style the single primary button on this page as
-    # a subtle dark-green instead of Streamlit's default coral/red.
+    # Inject CSS once: style the single primary button as dark-green;
+    # also prevent any button text from wrapping on narrow columns.
     st.markdown(
         """
         <style>
@@ -248,6 +248,9 @@ def _render_status_panel(store) -> None:
         }
         div[data-testid="stButton"] button[kind="primary"]:active {
             background-color: #1a5c2a !important;
+        }
+        div[data-testid="stButton"] button {
+            white-space: nowrap !important;
         }
         </style>
         """,
@@ -327,18 +330,18 @@ def _render_cycle_row(sig, *, key: str, latest: bool) -> None:
         ts = datetime.fromisoformat(sig.event_time_utc)
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        label_time = ts.astimezone(ZoneInfo("America/New_York")).strftime("%H:%M ET")
+        label_time = ts.astimezone(ZoneInfo("America/New_York")).strftime("%b %-d, %H:%M ET")
     except (ValueError, TypeError):
         label_time = "—"
 
     badge_size = "0.9rem" if latest else "0.8rem"
     col_badge, col_btn = st.columns([3, 1])
     with col_badge:
-        tag = f"&nbsp;<span style='color:#aaa; font-size:0.75rem'>{label_time}</span>" if not latest else \
-              f"&nbsp;<span style='color:#aaa; font-size:0.78rem'>{label_time}</span>"
+        ts_size = "0.75rem" if not latest else "0.78rem"
         st.markdown(
             f"<div style='font-size:{badge_size}; margin:1px 0'>"
-            f"<span style='color:{color}'>{icon} <b>{short_label}</b></span>{tag}"
+            f"<span style='color:{color}'>{icon} <b>{short_label}</b></span>"
+            f"&nbsp;<span style='color:#aaa; font-size:{ts_size}'>{label_time}</span>"
             f"</div>",
             unsafe_allow_html=True,
         )

@@ -89,17 +89,18 @@ def show_signal_detail(sig: SignalRow) -> None:
             else:
                 st.caption("No reasoning captured.")
 
-        # Outcome (replay result)
-        st.markdown("**Outcome**")
-        if sig.replay_outcome:
-            pnl_color = "normal" if (sig.pnl_points or 0) >= 0 else "inverse"
-            st.metric(
-                sig.replay_outcome,
-                f"{sig.pnl_points:+.1f} pts" if sig.pnl_points is not None else "—",
-                delta_color=pnl_color,
-            )
-        else:
-            st.caption("Pending — not yet resolved.")
+        # Outcome (replay result — only meaningful for actual trade signals)
+        if sig.final_outcome == "TRADE_PLAN_ISSUED":
+            st.markdown("**Outcome**")
+            if sig.replay_outcome:
+                pnl_color = "normal" if (sig.pnl_points or 0) >= 0 else "inverse"
+                st.metric(
+                    sig.replay_outcome,
+                    f"{sig.pnl_points:+.1f} pts" if sig.pnl_points is not None else "—",
+                    delta_color=pnl_color,
+                )
+            else:
+                st.caption("Pending — trade not yet resolved.")
 
     # ── Right: Gate report ────────────────────────────────────────────────────
     with col_right:
