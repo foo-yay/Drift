@@ -59,6 +59,8 @@ gates:
   cooldown_enabled: true
   kill_switch_enabled: true
   kill_switch_path: data/.kill_switch
+  news_gate_enabled: true
+  news_blackout_minutes: 30
 
 strategy:
   allowed_setup_types:
@@ -76,6 +78,9 @@ llm:
   timeout_seconds: 30
   max_retries: 2
   api_key_env: ANTHROPIC_API_KEY
+  performance_context_enabled: true
+  performance_context_lookback_days: 30
+  few_shot_examples: 2
 
 storage:
   use_sqlite: true

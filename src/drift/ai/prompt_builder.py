@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 from drift.models import GateReport, MarketSnapshot
+
+if TYPE_CHECKING:
+    from drift.scoring.performance_context import PerformanceContext
 
 
 _SYSTEM_PROMPT = """\
@@ -41,6 +45,13 @@ If decision is NO_TRADE, set setup_type to "no_trade", entry_zone to [0.0, 0.0],
 class PromptBuilder:
     """Converts a MarketSnapshot and GateReport into a Claude API message list."""
 
+    def __init__(self) -> None:
+        self._perf_context: PerformanceContext | None = None
+
+    def set_performance_context(self, ctx: PerformanceContext | None) -> None:
+        """Update the performance context injected into the next system prompt build."""
+        self._perf_context = ctx
+
     def build(self, snapshot: MarketSnapshot, gate_report: GateReport) -> list[dict]:
         """Return the messages list for the Anthropic messages API."""
         user_content = self._format_snapshot(snapshot, gate_report)
@@ -48,7 +59,9 @@ class PromptBuilder:
 
     @property
     def system_prompt(self) -> str:
-        return _SYSTEM_PROMPT
+        if self._perf_context is None:
+            return _SYSTEM_PROMPT
+        return _SYSTEM_PROMPT + "\n\n" + _format_performance_block(self._perf_context)
 
     def _format_snapshot(self, snapshot: MarketSnapshot, gate_report: GateReport) -> str:
         scores = {
@@ -104,3 +117,59 @@ class PromptBuilder:
             "Evaluate the following market snapshot and return a JSON trading decision:\n\n"
             + json.dumps(payload, indent=2)
         )
+
+
+# ---------------------------------------------------------------------------
+# Performance context formatting
+# ---------------------------------------------------------------------------
+
+
+def _format_performance_block(ctx: PerformanceContext) -> str:
+    """Render the PerformanceContext as a plain-text block to append to the system prompt."""
+    from drift.scoring.performance_context import PerformanceContext  # local import avoids circular
+
+    lines: list[str] = [
+        "--- RECENT PERFORMANCE CONTEXT ---",
+        f"Data window: last {ctx.lookback_days} days | Resolved signals: {ctx.resolved_count}",
+        f"Overall win rate: {ctx.overall_win_rate_pct}%",
+    ]
+
+    # Streak
+    if ctx.recent_streak > 0:
+        lines.append(f"Recent streak: +{ctx.recent_streak} consecutive wins — avoid overconfidence.")
+    elif ctx.recent_streak < 0:
+        lines.append(f"Recent streak: {ctx.recent_streak} consecutive losses — apply extra scrutiny.")
+    else:
+        lines.append("Recent streak: mixed (no clear run).")
+
+    # Hour of day guidance
+    if ctx.best_hour_utc is not None:
+        lines.append(
+            f"Best hour (UTC): {ctx.best_hour_utc:02d}xx | "
+            f"Weakest hour (UTC): {ctx.worst_hour_utc:02d}xx"
+        )
+
+    # Per-setup-type stats
+    if ctx.setup_stats:
+        lines.append("Per-setup performance:")
+        for s in ctx.setup_stats:
+            lines.append(
+                f"  {s.setup_type}: {s.total} signals, "
+                f"{s.win_rate_pct}% win rate, "
+                f"avg pnl={s.avg_pnl_points:+.1f} pts"
+            )
+
+    # Few-shot examples
+    if ctx.few_shot_examples:
+        lines.append("Recent signal examples (use for calibration — do NOT copy the decision blindly):")
+        for i, ex in enumerate(ctx.few_shot_examples, 1):
+            lines.append(
+                f"  [{i}] {ex.event_time_utc[:16]}Z | {ex.bias} {ex.setup_type} "
+                f"conf={ex.confidence} → {ex.outcome} ({ex.pnl_points:+.1f} pts)"
+            )
+            if ex.thesis:
+                thesis_short = ex.thesis[:200].replace("\n", " ")
+                lines.append(f"      thesis: {thesis_short}")
+
+    lines.append("--- END PERFORMANCE CONTEXT ---")
+    return "\n".join(lines)

@@ -29,6 +29,7 @@ from drift.features.engine import FeatureEngine
 from drift.gates.calendar_gate import CalendarGate
 from drift.gates.cooldown_gate import CooldownGate
 from drift.gates.kill_switch_gate import KillSwitchGate
+from drift.gates.news_gate import NewsGate
 from drift.gates.regime_gate import RegimeGate
 from drift.gates.runner import GateRunner
 from drift.gates.session_gate import SessionGate
@@ -139,6 +140,7 @@ class ReplayEngine:
             KillSwitchGate(config.gates),
             SessionGate(sessions_cfg),
             CalendarGate(config.calendar),
+            NewsGate(config.gates),
             RegimeGate(config.gates),
             CooldownGate(config.gates, config.risk, config.storage.jsonl_event_log),
         ])
