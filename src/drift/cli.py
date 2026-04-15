@@ -284,5 +284,38 @@ def replay(
         console.print(f"[green]CSV exported → {export_csv}[/green]")
 
 
+@app.command("replay-gui")
+def replay_gui() -> None:
+    """Launch the Streamlit visual replay frontend in a local browser."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    app_path = Path(__file__).parent / "replay" / "streamlit_app.py"
+
+    # Derive the project root from cli.py's location:
+    #   src/drift/cli.py → parents[0]=drift, parents[1]=src, parents[2]=project root
+    # The venv's streamlit is always at <project_root>/.venv/bin/streamlit.
+    # This is immune to sys.executable and PATH resolving to a different Python.
+    project_root = Path(__file__).parents[2]
+    streamlit_bin = project_root / ".venv" / "bin" / "streamlit"
+
+    if not streamlit_bin.exists():
+        # Fallback: honour PATH (e.g. if the user uses a custom venv name)
+        found = shutil.which("streamlit")
+        if found:
+            streamlit_bin = Path(found)
+
+    if not streamlit_bin.exists():
+        console.print(
+            "[bold red]ERROR[/bold red] streamlit not found in .venv/bin/. "
+            "Run: .venv/bin/pip install streamlit plotly"
+        )
+        raise typer.Exit(1)
+
+    result = subprocess.run([str(streamlit_bin), "run", str(app_path)], check=False)
+    raise typer.Exit(result.returncode)
+
+
 if __name__ == "__main__":
     app()
