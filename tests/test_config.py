@@ -11,7 +11,7 @@ def test_load_default_config() -> None:
 
     assert isinstance(config, AppConfig)
     assert config.app.name == "Drift"
-    assert config.app.mode == "dry-run"
+    assert config.app.mode == "paper-live"
     assert config.instrument.symbol == "MNQ"
 
 
