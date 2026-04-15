@@ -31,7 +31,6 @@ import streamlit as st
 warnings.filterwarnings("ignore", message="Timestamp.utcnow")
 
 from drift.gui.components.candlestick import build_candlestick_chart
-from drift.gui.components.gate_status import render_gate_status, render_last_trade_plan
 from drift.gui.components.news_panel import render_news_panel
 from drift.gui.components.signal_detail import show_signal_detail
 from drift.gui.state import get_config, get_store
@@ -143,6 +142,10 @@ def _chart_fragment(symbol: str, tf: str, range_sel: str, store) -> None:
 
     @st.fragment(run_every=900)
     def _inner() -> None:
+        # Stamp wall-clock time so the countdown in the status panel knows
+        # when this fragment last ran (driven by run_every=900).
+        st.session_state["_last_cycle_wall_ts"] = time.monotonic()
+
         interval = _TF_INTERVAL[tf]
         lookback = _RANGE_LOOKBACK[tf][range_sel]
 
@@ -215,8 +218,15 @@ def _handle_chart_click(selected: dict | None, signals: list) -> None:
 # Status panel (right column)
 # ---------------------------------------------------------------------------
 
+_CYCLE_BADGE = {
+    "TRADE_PLAN_ISSUED": ("🟢", "#4caf50", "Trade Plan"),
+    "LLM_NO_TRADE":      ("🟡", "#f5a623", "No Trade"),
+    "BLOCKED":           ("🔴", "#e53935", "Blocked"),
+}
+
+
 def _render_status_panel(store) -> None:
-    """Shows engine status, Run Now button, gate results, and last trade plan."""
+    """Shows engine status, Run Now button, and compact cycle history."""
     config = _load_config()
 
     # Header
@@ -252,17 +262,7 @@ def _render_status_panel(store) -> None:
         if kill_path.exists():
             st.error("🔴 KILL SWITCH ACTIVE", icon="🚨")
         else:
-            # Compact single-line status + loop interval
-            loop_secs = getattr(getattr(config, "app", None), "loop_interval_seconds", None)
-            loop_label = ""
-            if loop_secs:
-                mins = loop_secs // 60
-                secs = loop_secs % 60
-                loop_label = f"  ·  auto every {mins} min" + (f" {secs:02d} s" if secs else "")
-            st.markdown(
-                f"<p style='margin:2px 0; color:#4caf50; font-size:0.85rem'>● Ready{loop_label}</p>",
-                unsafe_allow_html=True,
-            )
+            _render_status_countdown(config)
     except Exception:  # noqa: BLE001
         st.caption("● Status unknown")
 
@@ -276,41 +276,75 @@ def _render_status_panel(store) -> None:
     except Exception:  # noqa: BLE001
         recent = []
 
-    last_sig = recent[0] if recent else None
+    st.markdown("**Last Cycle**")
+    if not recent:
+        st.caption("No cycles run yet.")
+    else:
+        _render_cycle_row(recent[0], key="cycle_0", latest=True)
 
-    # Detailed view of most recent cycle
-    render_gate_status(last_sig)
-    render_last_trade_plan(last_sig)
-
-    # Compact history feed — rows 2–10
     if len(recent) > 1:
         st.divider()
         st.markdown("**Recent Cycles**")
-        _BADGE = {
-            "TRADE_PLAN_ISSUED": ("🟢", "#4caf50"),
-            "LLM_NO_TRADE":      ("🟡", "#f5a623"),
-            "BLOCKED":           ("🔴", "#e53935"),
-        }
-        from datetime import datetime, timezone
-        from zoneinfo import ZoneInfo
-        _ET = ZoneInfo("America/New_York")
-        for sig in recent[1:]:
-            icon, color = _BADGE.get(sig.final_outcome, ("⚪", "#888888"))
-            try:
-                ts = datetime.fromisoformat(sig.event_time_utc)
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
-                label_time = ts.astimezone(_ET).strftime("%H:%M")
-            except (ValueError, TypeError):
-                label_time = "—"
+        for i, sig in enumerate(recent[1:], start=1):
+            _render_cycle_row(sig, key=f"cycle_{i}", latest=False)
+
+
+def _render_status_countdown(config) -> None:
+    """Live countdown fragment refreshing every 10 s."""
+    @st.fragment(run_every=10)
+    def _inner() -> None:
+        loop_secs = getattr(getattr(config, "app", None), "loop_interval_seconds", 900)
+        last_ts = st.session_state.get("_last_cycle_wall_ts")
+        if last_ts is None:
             st.markdown(
-                f"<div style='display:flex; gap:6px; align-items:baseline; font-size:0.8rem; margin:1px 0'>"
-                f"<span>{icon}</span>"
-                f"<span style='color:{color}; white-space:nowrap'>{sig.final_outcome}</span>"
-                f"<span style='color:#888; margin-left:auto; white-space:nowrap'>{label_time} ET</span>"
-                f"</div>",
+                "<p style='margin:2px 0; color:#4caf50; font-size:0.85rem'>● Ready</p>",
                 unsafe_allow_html=True,
             )
+            return
+        elapsed  = time.monotonic() - last_ts
+        remaining = max(0.0, loop_secs - elapsed)
+        mins = int(remaining) // 60
+        secs = int(remaining) % 60
+        if remaining < 30:
+            color, label = "#f5a623", f"● Running soon — {mins}:{secs:02d}"
+        else:
+            color, label = "#4caf50", f"● Ready · next in {mins}:{secs:02d}"
+        st.markdown(
+            f"<p style='margin:2px 0; color:{color}; font-size:0.85rem'>{label}</p>",
+            unsafe_allow_html=True,
+        )
+    _inner()
+
+
+def _render_cycle_row(sig, *, key: str, latest: bool) -> None:
+    """Compact single-row card for one cycle with a Details button."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    from drift.gui.components.signal_detail import show_signal_detail
+
+    icon, color, short_label = _CYCLE_BADGE.get(sig.final_outcome, ("⚪", "#888", sig.final_outcome))
+    try:
+        ts = datetime.fromisoformat(sig.event_time_utc)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        label_time = ts.astimezone(ZoneInfo("America/New_York")).strftime("%H:%M ET")
+    except (ValueError, TypeError):
+        label_time = "—"
+
+    badge_size = "0.9rem" if latest else "0.8rem"
+    col_badge, col_btn = st.columns([3, 1])
+    with col_badge:
+        tag = f"&nbsp;<span style='color:#aaa; font-size:0.75rem'>{label_time}</span>" if not latest else \
+              f"&nbsp;<span style='color:#aaa; font-size:0.78rem'>{label_time}</span>"
+        st.markdown(
+            f"<div style='font-size:{badge_size}; margin:1px 0'>"
+            f"<span style='color:{color}'>{icon} <b>{short_label}</b></span>{tag}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    with col_btn:
+        if st.button("Details", key=f"detail_{key}", use_container_width=True):
+            show_signal_detail(sig)
 
 
 @st.dialog("Run Now — Cycle Output", width="large")
@@ -383,6 +417,7 @@ def _run_cycle_now(config) -> None:
     st.session_state["_run_outcome"]     = outcome
     st.session_state["_run_error"]       = error_msg
     st.session_state["_show_run_output"] = True
+    st.session_state["_last_cycle_wall_ts"] = time.monotonic()  # reset countdown
     st.cache_resource.clear()  # force store to re-open on rerun
     st.rerun()  # re-render page so panel picks up new signal + dialog opens
 
