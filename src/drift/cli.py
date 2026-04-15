@@ -287,15 +287,29 @@ def replay(
 @app.command("replay-gui")
 def replay_gui() -> None:
     """Launch the Streamlit visual replay frontend in a local browser."""
+    import shutil
     import subprocess
     import sys
     from pathlib import Path
 
     app_path = Path(__file__).parent / "replay" / "streamlit_app.py"
-    # Use the streamlit binary from the same bin/ directory as the running
-    # Python — this is always the venv's streamlit, regardless of how the
-    # shell's PATH is configured.
-    streamlit_bin = Path(sys.executable).parent / "streamlit"
+
+    # Prefer the streamlit binary that lives beside the drift script being
+    # executed — this is always the correct venv regardless of how sys.executable
+    # resolves.  Fall back to shutil.which if that path doesn't exist.
+    streamlit_bin = Path(sys.argv[0]).resolve().parent / "streamlit"
+    if not streamlit_bin.exists():
+        found = shutil.which("streamlit")
+        if found:
+            streamlit_bin = Path(found)
+
+    if not streamlit_bin.exists():
+        console.print(
+            "[bold red]ERROR[/bold red] streamlit not found. "
+            "Run: pip install streamlit"
+        )
+        raise typer.Exit(1)
+
     result = subprocess.run([str(streamlit_bin), "run", str(app_path)], check=False)
     raise typer.Exit(result.returncode)
 
