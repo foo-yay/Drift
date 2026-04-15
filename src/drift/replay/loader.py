@@ -13,10 +13,15 @@ model instances so the rest of the pipeline is provider-agnostic.
 from __future__ import annotations
 
 import csv
+import warnings
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import yfinance as yf
+
+# yfinance uses pd.Timestamp.utcnow() which is deprecated in pandas 4.
+# This is an upstream bug — suppress until yfinance ships a fix.
+warnings.filterwarnings("ignore", message="Timestamp.utcnow", category=FutureWarning)
 
 from drift.data.providers.yfinance_provider import _resolve_ticker
 from drift.models import Bar

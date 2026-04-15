@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import warnings
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import yfinance as yf
+
+# yfinance uses pd.Timestamp.utcnow() which is deprecated in pandas 4.
+# Suppress until yfinance ships a fix.
+warnings.filterwarnings("ignore", message="Timestamp.utcnow", category=FutureWarning)
 
 from drift.data.providers.base import MarketDataProvider
 from drift.models import Bar
