@@ -11,7 +11,7 @@ from drift.models import GateResult, LLMDecision, MarketSnapshot, TradePlan
 console = Console()
 
 
-def render_startup(config: AppConfig, config_path: str, dry_run: bool = False) -> None:
+def render_startup(config: AppConfig, config_path: str, sandbox: bool = False) -> None:
     table = Table(show_header=False, box=None)
     table.add_row("App", config.app.name)
     table.add_row("Mode", config.app.mode)
@@ -19,8 +19,8 @@ def render_startup(config: AppConfig, config_path: str, dry_run: bool = False) -
     table.add_row("Loop Interval", f"{config.app.loop_interval_seconds}s")
     table.add_row("Timezone", config.app.timezone)
     table.add_row("Config", config_path)
-    if dry_run:
-        table.add_row("[bold yellow]DRY RUN[/bold yellow]", "[yellow]session gate bypassed — mock LLM[/yellow]")
+    if sandbox:
+        table.add_row("[bold yellow]SANDBOX[/bold yellow]", "[yellow]session gate bypassed — mock LLM — isolated storage[/yellow]")
     console.print(Panel(table, title="Drift Startup", expand=False))
 
 

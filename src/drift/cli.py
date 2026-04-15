@@ -33,13 +33,20 @@ def run(
         bool,
         typer.Option("--once/--loop", help="Run a single cycle then exit. Default is to loop continuously."),
     ] = False,
+    sandbox: Annotated[
+        bool,
+        typer.Option("--sandbox", help="Bypass session gate and use mock LLM. Writes to isolated sandbox storage paths. Use for testing outside market hours."),
+    ] = False,
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Bypass session gate and use mock LLM. Test outside market hours without spending API credits."),
+        typer.Option("--dry-run", hidden=True, help="Deprecated — use --sandbox instead."),
     ] = False,
 ) -> None:
+    if dry_run:
+        console.print("[bold yellow]Warning:[/bold yellow] --dry-run is deprecated. Use --sandbox instead.")
+        sandbox = True
     config = load_app_config(config_path)
-    application = DriftApplication(config=config, config_path=config_path, dry_run=dry_run)
+    application = DriftApplication(config=config, config_path=config_path, sandbox=sandbox)
     if once:
         application.run_once()
         return

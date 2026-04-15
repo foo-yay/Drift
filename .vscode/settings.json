@@ -36,6 +36,7 @@
         "/^cd \"/Users/elliot/Documents/My Documents/Business/Carolina Edge Gaming/Market Arbitrage/Stocks/2\\.0\" && source \\.venv/bin/activate && drift replay 2>&1 \\| head -60$/": {
             "approve": true,
             "matchCommandLine": true
-        }
+        },
+        ".venv/bin/python": true
     }
 }

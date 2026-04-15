@@ -87,6 +87,8 @@ storage:
   sqlite_path: data/local.db
   jsonl_event_log: logs/events.jsonl
   csv_signal_log: logs/signals.csv
+  sandbox_sqlite_path: data/sandbox.db
+  sandbox_jsonl_event_log: logs/sandbox_events.jsonl
 
 output:
   console: true

@@ -147,7 +147,7 @@ with st.sidebar:
     st.subheader("Source")
     show_live    = st.checkbox("Live",    value=True,  key="show_live")
     show_replay  = st.checkbox("Replay",  value=True,  key="show_replay")
-    show_dry_run = st.checkbox("Dry-run", value=False, key="show_dry_run")
+    show_sandbox = st.checkbox("Sandbox", value=False, key="show_sandbox")
 
     st.divider()
 
@@ -186,7 +186,7 @@ def _src_ok(e) -> bool:
     src = getattr(e, "source", "live")
     if src == "live"    and not st.session_state.get("show_live",    True):  return False
     if src == "replay"  and not st.session_state.get("show_replay",  True):  return False
-    if src == "dry_run" and not st.session_state.get("show_dry_run", False): return False
+    if src == "sandbox" and not st.session_state.get("show_sandbox", False): return False
     return True
 
 

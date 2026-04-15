@@ -1964,3 +1964,302 @@ After generating the codebase scaffold, the next human review should focus on:
 
 Those reviews matter more than cosmetic code polish.
 
+---
+
+---
+
+# Phase 10 — Drift Platform: Full GUI Rebuild
+
+*Approved design as of April 2026. Supersedes the single-page Streamlit viewer from Phase 8.*
+
+---
+
+## 10.1 Guiding principles
+
+1. **Single pane of glass.** One `drift gui` command opens everything. No separate CLI knowledge required for day-to-day use.
+2. **The CLI becomes a machine interface.** `drift run`, `drift backfill-outcomes`, `drift validate-config` stay for automation and server deployments. Everything else moves to the GUI.
+3. **Production data is inviolable.** Sandbox/development signals are stored in physically separate files and databases. They cannot contaminate the production dashboard.
+4. **Signals are generated once, stored permanently.** The LLM is never called twice for the same market moment. SQLite is the source of truth for the GUI; JSONL is retained as a raw audit log.
+5. **The chart is live; the signals are cached.** Market data is re-fetched on demand (free via yfinance). Signal decisions are read from the database.
+
+---
+
+## 10.2 Dry-run / Sandbox strategy
+
+**Dry-run as a CLI flag is retired.** It is replaced by a first-class **Sandbox Mode** that applies at the application layer.
+
+| Concern | Production | Sandbox |
+|---|---|---|
+| Signal log | `logs/events.jsonl` | `logs/sandbox_events.jsonl` |
+| Database | `data/prod.db` | `data/sandbox.db` |
+| LLM calls | Real (uses API credits) | MockLLMClient (no cost) |
+| GUI visibility | Signal History, Live Monitor | Sandbox indicator only — never mixed into production views |
+| Kill switch | `data/.kill_switch` | `data/.sandbox_kill_switch` |
+
+Sandbox activation:
+- CLI: `drift run --sandbox`
+- GUI: toggle on the Controls page — shows a persistent orange "SANDBOX MODE" banner
+
+Unit tests use neither path — they mock at the provider and LLM layer, as they do now. This eliminates the contamination problem entirely at the filesystem level.
+
+---
+
+## 10.3 Signal persistence and deduplication
+
+### The problem
+Today every replay run re-calls the LLM for every step. There is no deduplication: running replay over the same date twice creates duplicate signals.
+
+### Signal identity key
+Every signal receives a deterministic `signal_key`:
+
+```python
+signal_key = sha256(f"{symbol}|{snapshot.as_of.isoformat()}|{source}").hexdigest()[:16]
+```
+
+`snapshot.as_of` is the exact market moment the snapshot was computed from — deterministic across runs because it comes from the bar timestamps, not wall clock time.
+
+Inserting a duplicate key is a no-op (`INSERT OR IGNORE`). Replaying the same date twice is always safe by default.
+
+### Overwrite mode
+When the user explicitly wants to re-run:
+- GUI: "Overwrite existing signals" checkbox in Replay Lab → confirmation dialog → `DELETE WHERE date_range AND source='replay' AND symbol=?` before running
+- CLI: `drift replay --overwrite`
+
+### Dual-write architecture
+`EventLogger.append_event()` writes to both:
+1. JSONL (append-only audit log — never modified after write)
+2. SQLite via `SignalStore.upsert()` (query layer for the GUI)
+
+On first startup, if SQLite is empty but JSONL exists, a migration helper imports all JSONL events into SQLite automatically.
+
+---
+
+## 10.4 SQLite schema
+
+```sql
+CREATE TABLE signals (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_key       TEXT UNIQUE NOT NULL,
+    symbol           TEXT NOT NULL,
+    source           TEXT NOT NULL,          -- 'live', 'replay', 'sandbox'
+    event_time_utc   TEXT NOT NULL,
+    as_of_utc        TEXT NOT NULL,          -- snapshot moment (dedup anchor)
+    final_outcome    TEXT NOT NULL,          -- BLOCKED, LLM_NO_TRADE, TRADE_PLAN_ISSUED
+    bias             TEXT,                   -- LONG / SHORT / null
+    setup_type       TEXT,
+    confidence       INTEGER,
+    entry_min        REAL,
+    entry_max        REAL,
+    stop_loss        REAL,
+    take_profit_1    REAL,
+    take_profit_2    REAL,
+    reward_risk      REAL,
+    pnl_points       REAL,
+    replay_outcome   TEXT,                   -- TP1_HIT / STOP_HIT / etc.
+    thesis           TEXT,
+    snapshot_json    TEXT,                   -- full MarketSnapshot (JSON)
+    gate_report_json TEXT,
+    llm_json         TEXT,
+    created_at       TEXT NOT NULL
+);
+
+CREATE INDEX idx_signals_symbol_date ON signals(symbol, as_of_utc);
+CREATE INDEX idx_signals_source      ON signals(source);
+CREATE INDEX idx_signals_outcome     ON signals(final_outcome);
+
+CREATE TABLE replay_runs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_key       TEXT UNIQUE NOT NULL,      -- sha256(symbol|date_start|date_end|source)
+    symbol        TEXT NOT NULL,
+    date_start    TEXT NOT NULL,
+    date_end      TEXT NOT NULL,
+    source        TEXT NOT NULL DEFAULT 'replay',
+    signal_count  INTEGER DEFAULT 0,
+    completed_at  TEXT NOT NULL
+);
+```
+
+---
+
+## 10.5 File/package structure
+
+```
+src/drift/
+  storage/
+    logger.py           # existing — dual-write updated
+    reader.py           # existing — JSONL reader retained
+    signal_store.py     # NEW — SQLite CRUD
+    migrator.py         # NEW — JSONL → SQLite one-time import
+  gui/
+    __init__.py
+    app.py              # st.set_page_config, nav, shared state init
+    state.py            # session_state wrappers
+    pages/
+      1_live_monitor.py
+      2_signal_history.py
+      3_replay_lab.py
+      4_controls.py
+      5_settings.py
+    components/
+      candlestick.py    # build_candlestick_chart(bars, signals, tf)
+      signal_detail.py  # @st.dialog signal detail modal
+      gate_status.py    # gate pass/fail indicator panel
+      news_panel.py     # ForexFactory today's events with countdown
+```
+
+CLI entry point changes:
+- `drift gui` — launches Streamlit on the `gui/app.py` entrypoint
+- `drift replay-gui` — **deprecated**, prints "Use `drift gui` instead"
+
+---
+
+## 10.6 Page specifications
+
+### Page 1 — Live Monitor
+
+**Purpose:** The primary screen. Open in the morning, leave running.
+
+**Layout:**
+```
+┌──────────────────────────────────────────────────────┬────────────────────┐
+│  MNQ  21,045.25  ▲ +12.50 (+0.06%)   12:43 ET       │  ENGINE STATUS     │
+├──────────────────────────────────────────────────────│  ● Running          │
+│  [1m][5m][1H][4H][D][W][M]          [EMAs][VWAP][OB]│  Next cycle: 7:23  │
+│                                                      │                    │
+│       Plotly Candlestick chart                       │  LAST CYCLE 14:30  │
+│       Signal markers overlaid:                       │  ✅ KillSwitch     │
+│         ▲ green = LONG                               │  ✅ Session        │
+│         ▼ red   = SHORT                              │  ✅ Calendar       │
+│         ◇ gray  = NO_TRADE / BLOCKED                 │  ✅ News           │
+│       Clicking a marker → signal detail dialog       │  ✅ Regime         │
+│                                                      │  ✅ Cooldown       │
+│                                                      │                    │
+│                                                      │  LLM: LONG 72%     │
+│                                                      │  pullback_cont     │
+├──────────────────────────────────────────────────────│  Entry 21040-44    │
+│  TODAY'S MACRO EVENTS                                │  Stop   21,018     │
+│  🔴 08:30 — CPI m/m (USD) — in 2h 14m              │  TP1    21,065     │
+│  🟡 10:00 — Consumer Confidence — in 4h 24m         │  TP2    21,090     │
+│  🔴 14:00 — FOMC Minutes — in 8h 24m               │                    │
+└──────────────────────────────────────────────────────┴────────────────────┘
+```
+
+- Chart auto-refreshes every 15 minutes using `@st.fragment(run_every=900)`
+- Timeframe selector controls yfinance fetch interval and bar count
+- Overlay toggles (EMAs, VWAP, Order Blocks) are Phase 10d+ — placeholder checkboxes until then
+- Signal markers for last 7 days are fetched from SQLite, loaded onto chart
+- Macro events panel uses existing `ForexFactoryCalendarProvider` — no new data source
+- Right panel reads last event from SQLite, not from a running process (polling the file system via SQLite is safe and fast)
+
+### Page 2 — Signal History
+
+**Purpose:** Full auditable ledger of every signal the system has ever generated.
+
+**Layout:**
+- Filter bar: date range, source (Live / Replay / Sandbox), outcome, setup type, bias
+- Metric row: total signals, resolved count, win rate, total PnL
+- Sortable table (SQLite-backed, server-side filtering — never loads all rows into memory)
+- Each row: checkbox for bulk delete, date/time, bias, setup type, confidence, outcome, PnL
+- Clicking any row → Signal Detail dialog
+- Export selected rows to CSV
+
+**Signal Detail dialog:**
+- Header: timestamp, symbol, source badge, outcome badge
+- Left column: trade plan (entry, stop, TP1, TP2, R:R, thesis, do-not-trade conditions)
+- Right column: gate report (each gate pass/fail), LLM raw parsed response
+- Bottom: snapshot chart — 5m if data available (within 7 days), else daily bar with signal approximated and a note
+- Delete button with confirmation
+
+### Page 3 — Replay Lab
+
+**Purpose:** Run historical replays, view stored results. No LLM re-call if signals already exist for the period.
+
+**Layout:**
+```
+┌─ Configure ──────────────────────────────────────────────────────────────┐
+│  Instrument: MNQ                                                         │
+│  Data source: ● Date range  ○ Upload CSVs                               │
+│  Date: [2026-04-10] → [2026-04-10]                                      │
+│  LLM: ● Mock (free)  ○ Real Claude (uses API credits)                   │
+│                                                                          │
+│  12 signals already stored for this range.                               │
+│  ● Show stored results   ○ Overwrite (re-run) [confirmation required]   │
+│                                                                          │
+│  [▶ Run Replay] / [📊 Show Stored Results]                              │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+- On "Show Stored Results": renders equity curve + table immediately from SQLite
+- On "Run Replay": progress bar, then same equity curve + table after completion
+- Overwrite requires a two-step confirmation (checkbox + button)
+- Results stay on page after navigation — stored in SQLite, not session state
+
+### Page 4 — Controls
+
+**Purpose:** Emergency and operational controls. No signal generation happens here.
+
+- Engine toggle (Start / Stop) via control file `data/.engine_command`
+- Kill Switch toggle — large, red, with confirmation dialog
+- Sandbox Mode toggle — with orange banner explanation
+- Run One Cycle Now button
+
+### Page 5 — Settings
+
+**Purpose:** Form-based config editor. No YAML knowledge required.
+
+Sections exposed (user-facing only — internals stay YAML-only):
+- Instrument (symbol, allow long/short)
+- Session (trading window, skip-open minutes)
+- Gates (regime, news blackout, calendar buffers, cooldown)
+- Risk (min confidence, min R:R, max signals/day, stop bounds)
+- LLM (model, temperature, performance context toggles)
+
+Pydantic validates the form before writing. Shows a diff preview. Writes `config/settings.yaml` atomically.
+
+---
+
+## 10.7 Data-availability strategy for charts
+
+| Data age | 1m / 5m bars | 1H / 4H bars | Daily bars |
+|---|---|---|---|
+| 0–7 days | Available | Available | Available |
+| 7–60 days | Not available | Available | Available |
+| 60+ days | Not available | Not available | Available |
+
+For Signal Detail dialogs showing old signals:
+- If within 7 days: show 5m chart with exact signal position
+- If 7–60 days: show 1H chart, signal approximated to nearest hour, note displayed
+- If 60+ days: show daily chart, signal marked at the day's candle, note displayed
+- Signal markers always show the stored entry/stop/TP levels regardless of timeframe
+
+---
+
+## 10.8 Build phases and branch plan
+
+### Phase 10a — SQLite signal store (`feature/phase-10a-sqlite-store`)
+- `storage/signal_store.py` — create, upsert (INSERT OR IGNORE), query (filters), delete, list replay runs
+- `signal_key` field added to `SignalEvent` model
+- `EventLogger.append_event()` updated to dual-write (JSONL + SQLite)
+- `storage/migrator.py` — one-shot import of existing JSONL into SQLite on startup
+- Sandbox path isolation: `AppConfig` computes all paths based on `sandbox: bool` flag
+- `drift run --sandbox` CLI flag replacing `--dry-run`
+- Tests: dedup, sandbox isolation, JSONL round-trip, migration idempotency
+
+### Phase 10b — Multi-page GUI scaffold + Live Monitor (`feature/phase-10b-gui-live`)
+- `src/drift/gui/` package created
+- `drift gui` CLI command
+- Multi-page Streamlit layout
+- Live Monitor page: candlestick chart (Plotly `go.Candlestick`), 7-day signal markers, gate status panel, macro events panel
+- `@st.fragment(run_every=900)` auto-refresh for chart section
+
+### Phase 10c — Signal History + Replay Lab (`feature/phase-10c-gui-history-replay`)
+- Signal History page: SQLite-backed table, filter bar, metric row, row delete, detail modal with adaptive snapshot chart
+- Replay Lab page: date picker, skip vs overwrite choice, progress bar, inline results
+- Signal Detail dialog: full trade plan + gate report + adaptive chart
+
+### Phase 10d — Controls + Settings pages (`feature/phase-10d-gui-controls-settings`)
+- Controls page: engine toggle via control file, kill switch toggle, sandbox toggle
+- Settings page: form-based Pydantic-validated config editor
+- Retire `drift kill`, `drift resume`, `drift replay-gui` CLI commands (print deprecation message)
+- Phase 11 placeholder: overlay toggles (EMAs, VWAP, Order Blocks) stubbed but inactive
+
