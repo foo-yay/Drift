@@ -40,14 +40,26 @@ def _run_replay(
     start: date,
     end: date,
     disable_session_gate: bool,
+    dry_run: bool,
 ) -> tuple[ReplaySummary, list]:
+    import os
+    from drift.ai.client import LLMClient
+    from drift.ai.mock_client import MockLLMClient
+
     config = load_app_config(_CONFIG_PATH)
     bars_1m, bars_5m, bars_1h = fetch_bars_for_date_range(symbol, start, end)
+
+    if dry_run or not os.environ.get("ANTHROPIC_API_KEY"):
+        llm_client = MockLLMClient()
+    else:
+        llm_client = LLMClient(config.llm)
+
     engine = ReplayEngine(
         config=config,
         bars_1m=bars_1m,
         bars_5m=bars_5m,
         bars_1h=bars_1h,
+        llm_client=llm_client,
         disable_session_gate=disable_session_gate,
         verbose=False,
     )
@@ -74,6 +86,11 @@ with st.sidebar:
         value=False,
         help="Show signals outside RTH hours (useful for overnight / pre-market review).",
     )
+    dry_run = st.checkbox(
+        "Dry run (mock LLM)",
+        value=False,
+        help="Use the mock LLM instead of Claude. No API credits spent. Enabled automatically if ANTHROPIC_API_KEY is not set.",
+    )
 
     st.divider()
     run_btn = st.button("▶ Run Replay", type="primary", use_container_width=True)
@@ -95,7 +112,7 @@ if run_btn:
     # Clear cache so changing dates always re-fetches
     _run_replay.clear()
     try:
-        summary, bars_1m = _run_replay("MNQ", start_date, end_date, disable_session)
+        summary, bars_1m = _run_replay("MNQ", start_date, end_date, disable_session, dry_run)
         st.session_state["summary"] = summary
         st.session_state["bars_1m"] = bars_1m
         st.session_state.pop("selected_idx", None)
