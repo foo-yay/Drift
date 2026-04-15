@@ -279,11 +279,13 @@ def _render_status_panel(store) -> None:
 
     try:
         from drift.gui.state import project_root
+        from drift.gui.scheduler import ensure_scheduler_running
         kill_path = project_root() / "data" / ".kill_switch"
         if kill_path.exists():
             st.error("🔴 KILL SWITCH ACTIVE", icon="🚨")
         else:
-            _render_status_countdown(config, store)
+            scheduler = ensure_scheduler_running()
+            _render_status_countdown(config, store, scheduler)
     except Exception:  # noqa: BLE001
         st.caption("● Status unknown")
 
@@ -310,7 +312,7 @@ def _render_status_panel(store) -> None:
             _render_cycle_row(sig, key=f"cycle_{i}", latest=False)
 
 
-def _render_status_countdown(config, store) -> None:
+def _render_status_countdown(config, store, scheduler=None) -> None:
     """Live countdown fragment refreshing every 10 s.
 
     Derives elapsed time from the most recent signal in the DB so the
@@ -321,6 +323,14 @@ def _render_status_countdown(config, store) -> None:
     def _inner() -> None:
         loop_secs = getattr(getattr(config, "app", None), "loop_interval_seconds", 900)
 
+        # Scheduler health indicator
+        if scheduler is not None and not scheduler.is_alive():
+            st.markdown(
+                "<p style='margin:2px 0; color:#e53935; font-size:0.85rem'>● Scheduler stopped</p>",
+                unsafe_allow_html=True,
+            )
+            return
+
         try:
             recent = store.query(limit=1, order_desc=True)
             last_sig = recent[0] if recent else None
@@ -329,7 +339,7 @@ def _render_status_countdown(config, store) -> None:
 
         if last_sig is None:
             st.markdown(
-                "<p style='margin:2px 0; color:#4caf50; font-size:0.85rem'>● Ready</p>",
+                "<p style='margin:2px 0; color:#4caf50; font-size:0.85rem'>● Running — first cycle pending</p>",
                 unsafe_allow_html=True,
             )
             return

@@ -23,6 +23,7 @@ from drift.gui.pages import (
     settings,
     signal_history,
 )
+from drift.gui.scheduler import ensure_scheduler_running
 
 st.set_page_config(
     page_title="Drift",
@@ -30,6 +31,11 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ---------------------------------------------------------------------------
+# Background scheduler — starts once per process, runs regardless of browser
+# ---------------------------------------------------------------------------
+ensure_scheduler_running()
 
 # ---------------------------------------------------------------------------
 # Navigation
