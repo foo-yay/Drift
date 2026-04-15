@@ -152,13 +152,18 @@ def build_chart(
 
 
 def events_to_df(events: list[SignalEvent]) -> pd.DataFrame:
-    """Convert TRADE_PLAN_ISSUED events to a display-ready DataFrame."""
+    """Convert TRADE_PLAN_ISSUED events to a display-ready DataFrame.
+
+    Only events that have a resolved replay_outcome are included.  Events
+    logged by the live runner (``drift run``) have no outcome because the
+    trade has not yet closed; they are excluded from the table.
+    """
     rows = []
     for e in events:
-        if e.final_outcome != "TRADE_PLAN_ISSUED" or not e.trade_plan:
+        if e.final_outcome != "TRADE_PLAN_ISSUED" or not e.trade_plan or not e.replay_outcome:
             continue
         tp = e.trade_plan
-        out = e.replay_outcome or {}
+        out = e.replay_outcome
         rows.append({
             "Time (ET)": e.event_time.astimezone(_ET).strftime("%Y-%m-%d %H:%M"),
             "Bias": tp.get("bias"),

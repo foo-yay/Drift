@@ -237,6 +237,15 @@ with st.sidebar:
         st.caption("Source: `logs/events.jsonl`")
         if not _LOG_PATH.exists():
             st.warning("No events.jsonl found. Run a replay first to populate the log.")
+        else:
+            _all = load_events_from_log(_LOG_PATH)
+            _replay = [e for e in _all if e.final_outcome == "TRADE_PLAN_ISSUED" and e.replay_outcome]
+            _live   = [e for e in _all if e.final_outcome == "TRADE_PLAN_ISSUED" and not e.replay_outcome]
+            st.caption(
+                f"{len(_all)} events total  \n"
+                f"✅ {len(_replay)} replay signals (with outcome)  \n"
+                f"📌 {len(_live)} live signals (outcome unknown — not shown in table)"
+            )
         run_btn = st.button("🔄 Load / Refresh", type="primary", use_container_width=True)
 
 
