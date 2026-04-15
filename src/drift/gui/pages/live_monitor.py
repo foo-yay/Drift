@@ -272,13 +272,45 @@ def _render_status_panel(store) -> None:
     st.divider()
 
     try:
-        recent = store.query(limit=1, order_desc=True)
-        last_sig = recent[0] if recent else None
+        recent = store.query(limit=10, order_desc=True)
     except Exception:  # noqa: BLE001
-        last_sig = None
+        recent = []
 
+    last_sig = recent[0] if recent else None
+
+    # Detailed view of most recent cycle
     render_gate_status(last_sig)
     render_last_trade_plan(last_sig)
+
+    # Compact history feed — rows 2–10
+    if len(recent) > 1:
+        st.divider()
+        st.markdown("**Recent Cycles**")
+        _BADGE = {
+            "TRADE_PLAN_ISSUED": ("🟢", "#4caf50"),
+            "LLM_NO_TRADE":      ("🟡", "#f5a623"),
+            "BLOCKED":           ("🔴", "#e53935"),
+        }
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        _ET = ZoneInfo("America/New_York")
+        for sig in recent[1:]:
+            icon, color = _BADGE.get(sig.final_outcome, ("⚪", "#888888"))
+            try:
+                ts = datetime.fromisoformat(sig.event_time_utc)
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                label_time = ts.astimezone(_ET).strftime("%H:%M")
+            except (ValueError, TypeError):
+                label_time = "—"
+            st.markdown(
+                f"<div style='display:flex; gap:6px; align-items:baseline; font-size:0.8rem; margin:1px 0'>"
+                f"<span>{icon}</span>"
+                f"<span style='color:{color}; white-space:nowrap'>{sig.final_outcome}</span>"
+                f"<span style='color:#888; margin-left:auto; white-space:nowrap'>{label_time} ET</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
 
 @st.dialog("Run Now — Cycle Output", width="large")
