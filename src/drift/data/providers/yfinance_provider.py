@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import time
 import warnings
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -109,12 +108,12 @@ class YFinanceProvider(MarketDataProvider):
         ]
 
         df = None
-        for i, kwargs in enumerate(attempts):
+        for kwargs in attempts:
             df = ticker.history(**kwargs)
             if df is not None and not df.empty:
                 break
-            if i < len(attempts) - 1:
-                time.sleep(1)  # brief back-off before second attempt
+        # No sleep between attempts — yfinance already has its own internal
+        # timeout; adding sleep here makes Streamlit appear frozen.
 
         if df is None or df.empty:
             return []

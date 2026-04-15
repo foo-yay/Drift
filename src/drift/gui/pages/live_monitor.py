@@ -92,14 +92,14 @@ def page() -> None:
     )
 
     available_ranges = _TF_RANGES[tf]
-    # When the user switches timeframe reset to the default range for that tf.
+    # Initialise default range for this timeframe without using default=
+    # on the widget itself — mixing both causes a Streamlit warning.
     range_key = f"live_range_{tf}"
     if range_key not in st.session_state:
         st.session_state[range_key] = _TF_DEFAULT_RANGE[tf]
     range_sel = range_col.segmented_control(
         "Range",
         available_ranges,
-        default=st.session_state[range_key],
         key=range_key,
         label_visibility="collapsed",
     ) or _TF_DEFAULT_RANGE[tf]
