@@ -27,7 +27,7 @@ st.set_page_config(
     layout="wide",
 )
 
-_CONFIG_PATH = Path(__file__).parents[4] / "config" / "settings.yaml"
+_CONFIG_PATH = Path(__file__).parents[3] / "config" / "settings.yaml"
 
 
 # ------------------------------------------------------------------
