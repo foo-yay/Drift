@@ -96,9 +96,9 @@ class TestBackfillNoCandidates:
         resolved, skipped = backfill_outcomes(p, "MNQ=F")
         assert resolved == 0 and skipped == 0
 
-    def test_dry_run_source_skipped(self, tmp_path: Path) -> None:
+    def test_sandbox_source_skipped(self, tmp_path: Path) -> None:
         p = tmp_path / "events.jsonl"
-        _write_log(p, [_make_line(source="dry_run")])
+        _write_log(p, [_make_line(source="sandbox")])
         resolved, skipped = backfill_outcomes(p, "MNQ=F")
         assert resolved == 0 and skipped == 0
 
@@ -223,15 +223,15 @@ class TestSignalEventSource:
         )
         assert event.source == "replay"
 
-    def test_explicit_dry_run_source(self) -> None:
+    def test_explicit_sandbox_source(self) -> None:
         event = SignalEvent(
             event_time=_TS,
             symbol="MNQ=F",
-            source="dry_run",
+            source="sandbox",
             final_outcome="LLM_NO_TRADE",
             final_reason="test",
         )
-        assert event.source == "dry_run"
+        assert event.source == "sandbox"
 
     def test_legacy_jsonl_without_source_defaults_to_live(self) -> None:
         """Events written before the source field was added must parse as 'live'."""

@@ -33,20 +33,27 @@ from drift.storage.logger import EventLogger
 
 
 class DriftApplication:
-    def __init__(self, config: AppConfig, config_path: str, dry_run: bool = False) -> None:
+    def __init__(self, config: AppConfig, config_path: str, sandbox: bool = False) -> None:
         self.config = config
         self.config_path = config_path
-        self._dry_run = dry_run
-        self._source = "dry_run" if dry_run else "live"
-        self.event_logger = EventLogger(config.storage.jsonl_event_log)
+        self._sandbox = sandbox
+        self._source = "sandbox" if sandbox else "live"
+
+        # Sandbox mode writes to isolated file paths so it cannot contaminate
+        # production signal data.
+        jsonl_path = config.storage.sandbox_jsonl_event_log if sandbox else config.storage.jsonl_event_log
+        sqlite_path = config.storage.sandbox_sqlite_path if sandbox else (
+            config.storage.sqlite_path if config.storage.use_sqlite else None
+        )
+        self.event_logger = EventLogger(jsonl_path, sqlite_path)
         self._provider = YFinanceProvider()
         self._engine = FeatureEngine(config)
 
-        # In dry-run mode disable the session gate so signals flow through
+        # In sandbox mode disable the session gate so signals flow through
         # regardless of time of day, and disable the cooldown gate so repeated
         # test runs aren't blocked by prior signal history.
-        sessions_cfg = config.sessions.model_copy(update={"enabled": False}) if dry_run else config.sessions
-        cooldown_cfg = config.gates.model_copy(update={"cooldown_enabled": False}) if dry_run else config.gates
+        sessions_cfg = config.sessions.model_copy(update={"enabled": False}) if sandbox else config.sessions
+        cooldown_cfg = config.gates.model_copy(update={"cooldown_enabled": False}) if sandbox else config.gates
 
         self._gate_runner = GateRunner([
             KillSwitchGate(config.gates),
@@ -54,15 +61,15 @@ class DriftApplication:
             CalendarGate(config.calendar),
             NewsGate(config.gates),
             RegimeGate(config.gates),
-            CooldownGate(cooldown_cfg, config.risk, config.storage.jsonl_event_log),
+            CooldownGate(cooldown_cfg, config.risk, jsonl_path),
         ])
-        self._llm_client = MockLLMClient() if dry_run else LLMClient(
-            config.llm, log_path=config.storage.jsonl_event_log
+        self._llm_client = MockLLMClient() if sandbox else LLMClient(
+            config.llm, log_path=jsonl_path
         )
         self._plan_builder = TradePlanBuilder(config)
 
     def run_once(self) -> None:
-        render_startup(self.config, self.config_path, dry_run=self._dry_run)
+        render_startup(self.config, self.config_path, sandbox=self._sandbox)
 
         symbol = self.config.instrument.symbol
 

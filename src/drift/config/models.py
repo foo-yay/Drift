@@ -14,7 +14,7 @@ class AppSection(BaseModel):
     name: str
     timezone: str
     loop_interval_seconds: int = Field(gt=0)
-    mode: Literal["paper-live", "replay", "dry-run", "llm-debug"]
+    mode: Literal["paper-live", "replay", "dry-run", "sandbox", "llm-debug"]
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 
 
@@ -127,6 +127,8 @@ class StorageSection(BaseModel):
     sqlite_path: str
     jsonl_event_log: str
     csv_signal_log: str
+    sandbox_sqlite_path: str = "data/sandbox.db"
+    sandbox_jsonl_event_log: str = "logs/sandbox_events.jsonl"
 
 
 class OutputSection(BaseModel):

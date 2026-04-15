@@ -177,7 +177,7 @@ def events_to_df(events: list[SignalEvent]) -> pd.DataFrame:
 
     All events with a trade plan are included.  Unresolved signals show
     ``Outcome="PENDING"`` and blank PnL.  The ``Source`` column shows how
-    the signal was generated (``live``, ``replay``, or ``dry_run``).
+    the signal was generated (``live``, ``replay``, or ``sandbox``).
     """
     rows = []
     for e in events:

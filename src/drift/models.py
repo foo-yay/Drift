@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from typing import Any, Literal
 
@@ -124,7 +125,8 @@ class TradePlan(BaseModel):
 class SignalEvent(BaseModel):
     event_time: datetime
     symbol: str
-    source: Literal["live", "replay", "dry_run"] = "live"
+    source: Literal["live", "replay", "sandbox"] = "live"
+    signal_key: str | None = None          # deterministic dedup key — set on first write
     snapshot: dict[str, Any] | None = None
     llm_decision_raw: dict[str, Any] | None = None
     llm_decision_parsed: dict[str, Any] | None = None
@@ -134,4 +136,20 @@ class SignalEvent(BaseModel):
     final_outcome: str
     final_reason: str
     replay_outcome: dict[str, Any] | None = None  # OutcomeResult if resolved during replay
+
+    def compute_signal_key(self) -> str:
+        """Return a 16-char deterministic dedup key based on symbol, snapshot time, and source.
+
+        Uses ``snapshot["as_of"]`` when available (the exact market moment), falling back to
+        ``event_time`` so events without a snapshot (BLOCKED cycles) are still keyed uniquely.
+        """
+        as_of = (self.snapshot or {}).get("as_of") or self.event_time.isoformat()
+        raw = f"{self.symbol}|{as_of}|{self.source}"
+        return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+    def ensure_signal_key(self) -> "SignalEvent":
+        """Return a copy of self with signal_key populated if it was missing."""
+        if self.signal_key:
+            return self
+        return self.model_copy(update={"signal_key": self.compute_signal_key()})
 
