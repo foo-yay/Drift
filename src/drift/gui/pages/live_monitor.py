@@ -214,11 +214,21 @@ def _render_status_panel(store) -> None:
     """Shows engine status, Run Now button, gate results, and last trade plan."""
     config = _load_config()
 
-    hdr_col, btn_col = st.columns([2, 1])
-    hdr_col.markdown("**Engine Status**")
+    # Compact header row: title + small inline button
+    st.markdown(
+        "<div style='display:flex; align-items:center; gap:10px; margin-bottom:4px'>"
+        "<span style='font-weight:600; font-size:1rem'>Engine Status</span>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
-    if btn_col.button("▶ Run Now", key="run_now_btn", use_container_width=True, type="primary"):
-        _run_cycle_now(config, store)
+    run_col, _ = st.columns([1, 2])
+    run_clicked = run_col.button(
+        "▶ Run Now",
+        key="run_now_btn",
+        type="primary",
+        use_container_width=True,
+    )
 
     try:
         from drift.gui.state import project_root
@@ -226,13 +236,22 @@ def _render_status_panel(store) -> None:
         if kill_path.exists():
             st.error("🔴 KILL SWITCH ACTIVE", icon="🚨")
         else:
-            st.success("● Engine ready", icon="✅")
+            # Compact single-line status + loop interval
+            loop_secs = getattr(getattr(config, "app", None), "loop_interval_seconds", None)
+            loop_label = ""
+            if loop_secs:
+                mins = loop_secs // 60
+                secs = loop_secs % 60
+                loop_label = f"  ·  auto every {mins} min" + (f" {secs:02d} s" if secs else "")
+            st.markdown(
+                f"<p style='margin:2px 0; color:#4caf50; font-size:0.85rem'>● Ready{loop_label}</p>",
+                unsafe_allow_html=True,
+            )
     except Exception:  # noqa: BLE001
-        st.info("● Status unknown")
+        st.caption("● Status unknown")
 
-    loop_secs = getattr(getattr(config, "app", None), "loop_interval_seconds", None)
-    if loop_secs:
-        st.caption(f"Auto-loop: every {loop_secs // 60} min {loop_secs % 60:02d} s" if loop_secs % 60 else f"Auto-loop: every {loop_secs // 60} min")
+    if run_clicked:
+        _run_cycle_now(config, store)
 
     st.divider()
 
