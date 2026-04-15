@@ -252,29 +252,27 @@ def _render_status_panel(store) -> None:
         div[data-testid="stButton"] button {
             white-space: nowrap !important;
         }
-        /* Details link-style buttons inside cycle rows */
-        div[data-testid="stButton"] button:not([kind="primary"]) {
-            background:      transparent !important;
-            border:          none !important;
-            padding:         0 4px !important;
-            font-size:       0.75rem !important;
-            color:           #888 !important;
-            text-decoration: underline !important;
-            min-height:      unset !important;
-            line-height:     1.4 !important;
-            box-shadow:      none !important;
+        /* Cycle-row buttons: flat left-aligned rows */
+        div[data-testid="stButton"] button[data-testid="baseButton-secondary"] {
+            text-align:       left !important;
+            background:       transparent !important;
+            border:           1px solid #2c2c2c !important;
+            border-radius:    4px !important;
+            color:            #ccc !important;
+            padding:          4px 10px !important;
+            font-size:        0.82rem !important;
+            min-height:       unset !important;
+            line-height:      1.5 !important;
+            width:            100% !important;
+            box-shadow:       none !important;
         }
-        div[data-testid="stButton"] button:not([kind="primary"]):hover {
-            color: #ccc !important;
+        div[data-testid="stButton"] button[data-testid="baseButton-secondary"]:hover {
+            background:    #161616 !important;
+            border-color:  #444 !important;
+            color:         #fff !important;
         }
-        /* Remove the wrapper margins that cause vertical misalignment */
-        div[data-testid="stButton"]:has(button:not([kind="primary"])) {
-            margin:  0 !important;
-            padding: 0 !important;
-        }
-        div.stElementContainer:has(button:not([kind="primary"])) {
-            margin:  0 !important;
-            padding: 0 !important;
+        div[data-testid="stButton"]:has(button[data-testid="baseButton-secondary"]) {
+            margin-bottom: 4px !important;
         }
         </style>
         """,
@@ -344,12 +342,12 @@ def _render_status_countdown(config) -> None:
 
 
 def _render_cycle_row(sig, *, key: str, latest: bool) -> None:
-    """Compact single-row card for one cycle with a Details button."""
+    """Full-width clickable row for one cycle — click to open Signal Detail."""
     from datetime import datetime, timezone
     from zoneinfo import ZoneInfo
     from drift.gui.components.signal_detail import show_signal_detail
 
-    icon, color, short_label = _CYCLE_BADGE.get(sig.final_outcome, ("⚪", "#888", sig.final_outcome))
+    icon, _color, short_label = _CYCLE_BADGE.get(sig.final_outcome, ("⚪", "#888", sig.final_outcome))
     try:
         ts = datetime.fromisoformat(sig.event_time_utc)
         if ts.tzinfo is None:
@@ -358,20 +356,9 @@ def _render_cycle_row(sig, *, key: str, latest: bool) -> None:
     except (ValueError, TypeError):
         label_time = "—"
 
-    badge_size = "0.9rem" if latest else "0.8rem"
-    col_badge, col_btn = st.columns([5, 1], vertical_alignment="center")
-    with col_badge:
-        ts_size = "0.75rem" if not latest else "0.78rem"
-        st.markdown(
-            f"<div style='font-size:{badge_size}; margin:1px 0'>"
-            f"<span style='color:{color}'>{icon} <b>{short_label}</b></span>"
-            f"&nbsp;<span style='color:#aaa; font-size:{ts_size}'>{label_time}</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-    with col_btn:
-        if st.button("Details", key=f"detail_{key}"):
-            show_signal_detail(sig)
+    label = f"{icon} **{short_label}**   {label_time}   ›"
+    if st.button(label, key=f"detail_{key}", use_container_width=True):
+        show_signal_detail(sig)
 
 
 @st.dialog("Run Now — Cycle Output", width="large")
