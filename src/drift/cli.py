@@ -292,10 +292,11 @@ def replay_gui() -> None:
     from pathlib import Path
 
     app_path = Path(__file__).parent / "replay" / "streamlit_app.py"
-    result = subprocess.run(
-        [sys.executable, "-m", "streamlit", "run", str(app_path)],
-        check=False,
-    )
+    # Use the streamlit binary from the same bin/ directory as the running
+    # Python — this is always the venv's streamlit, regardless of how the
+    # shell's PATH is configured.
+    streamlit_bin = Path(sys.executable).parent / "streamlit"
+    result = subprocess.run([str(streamlit_bin), "run", str(app_path)], check=False)
     raise typer.Exit(result.returncode)
 
 
