@@ -292,24 +292,36 @@ def _render_status_panel(store) -> None:
     if run_clicked:
         _run_cycle_now(config)
 
-    st.divider()
+    _render_cycle_history(store)
 
-    try:
-        recent = store.query(limit=10, order_desc=True)
-    except Exception:  # noqa: BLE001
-        recent = []
 
-    st.markdown("**Last Cycle**")
-    if not recent:
-        st.caption("No cycles run yet.")
-    else:
-        _render_cycle_row(recent[0], key="cycle_0", latest=True)
+def _render_cycle_history(store) -> None:
+    """Cycle history fragment — re-queries the store every 10 s.
 
-    if len(recent) > 1:
+    Defined as a top-level helper (not nested inside _render_status_panel) so
+    that Streamlit can consistently identify the fragment across reruns.
+    """
+    @st.fragment(run_every=10)
+    def _inner() -> None:
+        try:
+            recent = store.query(limit=10, order_desc=True)
+        except Exception:  # noqa: BLE001
+            recent = []
+
         st.divider()
-        st.markdown("**Recent Cycles**")
-        for i, sig in enumerate(recent[1:], start=1):
-            _render_cycle_row(sig, key=f"cycle_{i}", latest=False)
+        st.markdown("**Last Cycle**")
+        if not recent:
+            st.caption("No cycles run yet.")
+        else:
+            _render_cycle_row(recent[0], key="hist_0", latest=True)
+
+        if len(recent) > 1:
+            st.divider()
+            st.markdown("**Recent Cycles**")
+            for i, sig in enumerate(recent[1:], start=1):
+                _render_cycle_row(sig, key=f"hist_{i}", latest=False)
+
+    _inner()
 
 
 def _render_status_countdown(config, store, scheduler=None) -> None:
