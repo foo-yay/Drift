@@ -256,6 +256,7 @@ class ReplayEngine:
             event = SignalEvent(
                 event_time=ts,
                 symbol=symbol,
+                source="replay",
                 snapshot=snapshot.model_dump(mode="json"),
                 pre_gate_report=gate_report.model_dump(mode="json"),
                 final_outcome="BLOCKED",
@@ -277,6 +278,7 @@ class ReplayEngine:
             event = SignalEvent(
                 event_time=ts,
                 symbol=symbol,
+                source="replay",
                 snapshot=snapshot.model_dump(mode="json"),
                 llm_decision_raw={"text": raw_text},
                 llm_decision_parsed=raw_dict,
@@ -301,6 +303,7 @@ class ReplayEngine:
             event = SignalEvent(
                 event_time=ts,
                 symbol=symbol,
+                source="replay",
                 snapshot=snapshot.model_dump(mode="json"),
                 llm_decision_raw={"text": raw_text},
                 llm_decision_parsed=raw_dict,
@@ -329,6 +332,7 @@ class ReplayEngine:
         event = SignalEvent(
             event_time=ts,
             symbol=symbol,
+            source="replay",
             snapshot=snapshot.model_dump(mode="json"),
             llm_decision_raw={"text": raw_text},
             llm_decision_parsed=raw_dict,

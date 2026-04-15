@@ -58,7 +58,13 @@ def build_chart(
     ]
 
     shapes: list[dict] = []
-    annotations: list[dict] = []
+    # Scatter data for outcome marker triangles
+    sc_x: list = []
+    sc_y: list = []
+    sc_colors: list = []
+    sc_symbols: list = []
+    sc_texts: list = []
+    sc_sizes: list = []
 
     for i, event in enumerate(trade_events):
         tp = event.trade_plan or {}
@@ -120,25 +126,40 @@ def build_chart(
                 line=dict(color="#00e6b3", width=1, dash="dot"),
             ))
 
-        # Outcome annotation at signal time
+        # Outcome marker triangle
         outcome_label = out.get("outcome", "")
-        marker_color = _OUTCOME_COLOR.get(outcome_label, "#999")
-        arrow = "▲" if bias == "LONG" else "▽"
+        marker_color = _OUTCOME_COLOR.get(outcome_label, "#4488ff")
         anchor_y = tp.get("entry_max") if bias == "LONG" else tp.get("entry_min")
-        annotations.append(dict(
-            x=sig_ts,
-            y=anchor_y,
-            xref="x",
-            yref="y",
-            text=f"<b>{arrow}</b> {outcome_label}",
-            font=dict(size=9, color=marker_color),
-            showarrow=False,
-            yanchor="bottom" if bias == "LONG" else "top",
+        sc_x.append(sig_ts)
+        sc_y.append(anchor_y)
+        sc_colors.append(marker_color)
+        sc_symbols.append("triangle-up" if bias == "LONG" else "triangle-down")
+        sc_texts.append(outcome_label or "PENDING")
+        sc_sizes.append(14 if is_selected else 10)
+
+    if sc_x:
+        fig.add_trace(go.Scatter(
+            x=sc_x,
+            y=sc_y,
+            mode="markers+text",
+            marker=dict(
+                symbol=sc_symbols,
+                color=sc_colors,
+                size=sc_sizes,
+                line=dict(width=1, color="#111111"),
+            ),
+            text=sc_texts,
+            textposition=[
+                "top center" if s == "triangle-up" else "bottom center" for s in sc_symbols
+            ],
+            textfont=dict(size=9, color="#cccccc"),
+            hoverinfo="text",
+            showlegend=False,
+            name="Signals",
         ))
 
     fig.update_layout(
         shapes=shapes,
-        annotations=annotations,
         xaxis_rangeslider_visible=False,
         height=520,
         margin=dict(l=10, r=10, t=30, b=10),
@@ -154,18 +175,19 @@ def build_chart(
 def events_to_df(events: list[SignalEvent]) -> pd.DataFrame:
     """Convert TRADE_PLAN_ISSUED events to a display-ready DataFrame.
 
-    Only events that have a resolved replay_outcome are included.  Events
-    logged by the live runner (``drift run``) have no outcome because the
-    trade has not yet closed; they are excluded from the table.
+    All events with a trade plan are included.  Unresolved signals show
+    ``Outcome="PENDING"`` and blank PnL.  The ``Source`` column shows how
+    the signal was generated (``live``, ``replay``, or ``dry_run``).
     """
     rows = []
     for e in events:
-        if e.final_outcome != "TRADE_PLAN_ISSUED" or not e.trade_plan or not e.replay_outcome:
+        if e.final_outcome != "TRADE_PLAN_ISSUED" or not e.trade_plan:
             continue
         tp = e.trade_plan
-        out = e.replay_outcome
+        out = e.replay_outcome or {}
         rows.append({
             "Time (ET)": e.event_time.astimezone(_ET).strftime("%Y-%m-%d %H:%M"),
+            "Source": getattr(e, "source", "live"),
             "Bias": tp.get("bias"),
             "Setup": tp.get("setup_type"),
             "Conf": tp.get("confidence"),
@@ -173,7 +195,7 @@ def events_to_df(events: list[SignalEvent]) -> pd.DataFrame:
             "Stop": tp.get("stop_loss"),
             "TP1": tp.get("take_profit_1"),
             "R:R": tp.get("reward_risk_ratio"),
-            "Outcome": out.get("outcome") or "",
+            "Outcome": out.get("outcome") or "PENDING",
             "PnL (pts)": float(out["pnl_points"]) if "pnl_points" in out else None,
             "Min": int(out["minutes_elapsed"]) if "minutes_elapsed" in out else None,
         })
@@ -183,3 +205,117 @@ def events_to_df(events: list[SignalEvent]) -> pd.DataFrame:
     df["PnL (pts)"] = pd.to_numeric(df["PnL (pts)"], errors="coerce").astype("float64")
     df["Min"] = pd.to_numeric(df["Min"], errors="coerce").astype("Int64")
     return df
+
+
+def build_equity_chart(
+    trade_events: list[SignalEvent],
+) -> tuple[go.Figure, list[int]]:
+    """Build a Plotly equity curve with clickable scatter markers.
+
+    Each scatter point represents a resolved TRADE_PLAN_ISSUED event.
+    Clicking a point returns ``customdata`` = the index of that event in
+    *trade_events*, so the caller can open the right signal detail dialog.
+
+    Args:
+        trade_events: All TRADE_PLAN_ISSUED events (resolved and pending).
+
+    Returns:
+        ``(figure, resolved_indices)`` where ``resolved_indices[i]`` is the
+        index into *trade_events* for the i-th plotted point.
+    """
+    resolved = [(i, e) for i, e in enumerate(trade_events) if e.replay_outcome]
+
+    if not resolved:
+        fig = go.Figure()
+        fig.update_layout(
+            height=280,
+            paper_bgcolor="#111111",
+            plot_bgcolor="#111111",
+            font=dict(color="#888888", size=12),
+            annotations=[dict(
+                text="No resolved signals yet — run drift backfill-outcomes or a new replay",
+                x=0.5, y=0.5, xref="paper", yref="paper",
+                showarrow=False, font=dict(color="#666666", size=13),
+            )],
+            margin=dict(l=10, r=10, t=10, b=10),
+        )
+        return fig, []
+
+    resolved_indices = [i for i, _ in resolved]
+    times      = [e.event_time.astimezone(_ET) for _, e in resolved]
+    pnl_values = [float((e.replay_outcome or {}).get("pnl_points", 0.0)) for _, e in resolved]
+
+    running: list[float] = []
+    total = 0.0
+    for pnl in pnl_values:
+        total += pnl
+        running.append(round(total, 2))
+
+    colors = [
+        _OUTCOME_COLOR.get((e.replay_outcome or {}).get("outcome", ""), "#4488ff")
+        for _, e in resolved
+    ]
+    hover_texts = [
+        (
+            f"{(e.replay_outcome or {}).get('outcome', '')}  "
+            f"{'+' if pnl >= 0 else ''}{pnl:.1f} pts"
+        )
+        for pnl, (_, e) in zip(pnl_values, resolved)
+    ]
+
+    curve_color = "#00b386" if total >= 0 else "#e05252"
+    fill_color  = "rgba(0,179,134,0.12)" if total >= 0 else "rgba(224,82,82,0.12)"
+
+    fig = go.Figure()
+
+    # Background equity line (non-interactive)
+    fig.add_trace(go.Scatter(
+        x=times,
+        y=running,
+        mode="lines",
+        line=dict(color=curve_color, width=2),
+        fill="tozeroy",
+        fillcolor=fill_color,
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+
+    # Clickable scatter markers — one per resolved signal
+    fig.add_trace(go.Scatter(
+        x=times,
+        y=running,
+        mode="markers",
+        marker=dict(
+            color=colors,
+            size=11,
+            line=dict(width=1.5, color="#111111"),
+            symbol="circle",
+        ),
+        customdata=resolved_indices,
+        text=hover_texts,
+        hovertemplate=(
+            "%{x|%Y-%m-%d %H:%M ET}<br>"
+            "%{text}<br>"
+            "Cumulative: <b>%{y:.1f} pts</b>"
+            "<extra></extra>"
+        ),
+        showlegend=False,
+        name="signals",
+    ))
+
+    fig.update_layout(
+        height=280,
+        title=(
+            f"Equity Curve — {len(resolved)} resolved  |  "
+            f"Total: {'+' if total >= 0 else ''}{total:.1f} pts  "
+            f"(click a dot to view signal detail)"
+        ),
+        paper_bgcolor="#111111",
+        plot_bgcolor="#111111",
+        font=dict(color="#cccccc", size=11),
+        xaxis=dict(gridcolor="#1e1e1e", type="date"),
+        yaxis=dict(gridcolor="#1e1e1e", title="Cumulative PnL (pts)"),
+        margin=dict(l=10, r=10, t=44, b=10),
+        dragmode=False,
+    )
+    return fig, resolved_indices

@@ -284,6 +284,44 @@ def replay(
         console.print(f"[green]CSV exported → {export_csv}[/green]")
 
 
+@app.command("backfill-outcomes")
+def backfill_outcomes_cmd(
+    config_path: Annotated[str, typer.Option("--config", help="Path to settings YAML.")] = (
+        "config/settings.yaml"
+    ),
+    log_path: Annotated[str, typer.Option("--log", help="Path to JSONL event log.")] = "",
+    max_hold: Annotated[int, typer.Option("--max-hold", help="Fallback max hold minutes when plan omits the value.")] = 90,
+) -> None:
+    """Retroactively resolve unresolved live TRADE_PLAN_ISSUED events.
+
+    Reads the JSONL log, finds live signals without a ``replay_outcome``, fetches
+    1m bars from yfinance, and writes the resolved outcome back to the log
+    atomically.  Only events with ``source == "live"`` (or no source field) are
+    patched — replay events already have outcomes.
+    """
+    from drift.storage.backfill import backfill_outcomes
+
+    config = load_app_config(config_path)
+    effective_log = log_path or str(config.storage.jsonl_event_log)
+    symbol = config.instrument.symbol
+
+    console.print(f"[dim]Backfilling outcomes for [bold]{symbol}[/bold] in {effective_log}...[/dim]")
+    try:
+        resolved, skipped = backfill_outcomes(
+            log_path=effective_log,
+            symbol=symbol,
+            max_hold_minutes=max_hold,
+        )
+    except FileNotFoundError as exc:
+        console.print(f"[bold red]ERROR[/bold red] Log file not found: {exc}")
+        raise typer.Exit(1) from exc
+
+    if resolved == 0 and skipped == 0:
+        console.print("[dim]No unresolved live signals found — nothing to do.[/dim]")
+    else:
+        render_success(f"Resolved [bold]{resolved}[/bold] signal(s).  Skipped: {skipped}")
+
+
 @app.command("replay-gui")
 def replay_gui() -> None:
     """Launch the Streamlit visual replay frontend in a local browser."""
