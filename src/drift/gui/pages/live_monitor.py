@@ -356,12 +356,17 @@ def _render_status_countdown(config, store, scheduler=None) -> None:
             )
             return
 
-        remaining = max(0.0, loop_secs - elapsed)
-        mins = int(remaining) // 60
-        secs = int(remaining) % 60
-        if remaining < 30:
+        remaining = loop_secs - elapsed
+        if remaining <= 0:
+            # Elapsed > full interval — cycle is overdue (scheduler is working on it)
+            color, label = "#f5a623", "● Cycle running…"
+        elif remaining < 30:
+            mins = int(remaining) // 60
+            secs = int(remaining) % 60
             color, label = "#f5a623", f"● Running soon — {mins}:{secs:02d}"
         else:
+            mins = int(remaining) // 60
+            secs = int(remaining) % 60
             color, label = "#4caf50", f"● Ready · next in {mins}:{secs:02d}"
         st.markdown(
             f"<p style='margin:2px 0; color:{color}; font-size:0.85rem'>{label}</p>",

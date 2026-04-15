@@ -86,10 +86,9 @@ class BackgroundScheduler:
     # ------------------------------------------------------------------
 
     def _loop(self) -> None:
-        """Sleep then run, forever."""
-        # Wait one full interval before the first automatic cycle so an
-        # immediate manual Run Now on startup doesn't collide.
-        time.sleep(self._interval)
+        """Run first cycle after a short startup delay, then loop on interval."""
+        # Short delay so the process finishes starting up before the first cycle.
+        time.sleep(5)
         while True:
             self._run_cycle()
             time.sleep(self._interval)
