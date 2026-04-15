@@ -124,6 +124,7 @@ class TradePlan(BaseModel):
 class SignalEvent(BaseModel):
     event_time: datetime
     symbol: str
+    source: Literal["live", "replay", "dry_run"] = "live"
     snapshot: dict[str, Any] | None = None
     llm_decision_raw: dict[str, Any] | None = None
     llm_decision_parsed: dict[str, Any] | None = None

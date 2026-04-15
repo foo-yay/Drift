@@ -58,7 +58,13 @@ def build_chart(
     ]
 
     shapes: list[dict] = []
-    annotations: list[dict] = []
+    # Scatter data for outcome marker triangles
+    sc_x: list = []
+    sc_y: list = []
+    sc_colors: list = []
+    sc_symbols: list = []
+    sc_texts: list = []
+    sc_sizes: list = []
 
     for i, event in enumerate(trade_events):
         tp = event.trade_plan or {}
@@ -120,25 +126,40 @@ def build_chart(
                 line=dict(color="#00e6b3", width=1, dash="dot"),
             ))
 
-        # Outcome annotation at signal time
+        # Outcome marker triangle
         outcome_label = out.get("outcome", "")
-        marker_color = _OUTCOME_COLOR.get(outcome_label, "#999")
-        arrow = "▲" if bias == "LONG" else "▽"
+        marker_color = _OUTCOME_COLOR.get(outcome_label, "#4488ff")
         anchor_y = tp.get("entry_max") if bias == "LONG" else tp.get("entry_min")
-        annotations.append(dict(
-            x=sig_ts,
-            y=anchor_y,
-            xref="x",
-            yref="y",
-            text=f"<b>{arrow}</b> {outcome_label}",
-            font=dict(size=9, color=marker_color),
-            showarrow=False,
-            yanchor="bottom" if bias == "LONG" else "top",
+        sc_x.append(sig_ts)
+        sc_y.append(anchor_y)
+        sc_colors.append(marker_color)
+        sc_symbols.append("triangle-up" if bias == "LONG" else "triangle-down")
+        sc_texts.append(outcome_label or "PENDING")
+        sc_sizes.append(14 if is_selected else 10)
+
+    if sc_x:
+        fig.add_trace(go.Scatter(
+            x=sc_x,
+            y=sc_y,
+            mode="markers+text",
+            marker=dict(
+                symbol=sc_symbols,
+                color=sc_colors,
+                size=sc_sizes,
+                line=dict(width=1, color="#111111"),
+            ),
+            text=sc_texts,
+            textposition=[
+                "top center" if s == "triangle-up" else "bottom center" for s in sc_symbols
+            ],
+            textfont=dict(size=9, color="#cccccc"),
+            hoverinfo="text",
+            showlegend=False,
+            name="Signals",
         ))
 
     fig.update_layout(
         shapes=shapes,
-        annotations=annotations,
         xaxis_rangeslider_visible=False,
         height=520,
         margin=dict(l=10, r=10, t=30, b=10),
@@ -154,18 +175,19 @@ def build_chart(
 def events_to_df(events: list[SignalEvent]) -> pd.DataFrame:
     """Convert TRADE_PLAN_ISSUED events to a display-ready DataFrame.
 
-    Only events that have a resolved replay_outcome are included.  Events
-    logged by the live runner (``drift run``) have no outcome because the
-    trade has not yet closed; they are excluded from the table.
+    All events with a trade plan are included.  Unresolved signals show
+    ``Outcome="PENDING"`` and blank PnL.  The ``Source`` column shows how
+    the signal was generated (``live``, ``replay``, or ``dry_run``).
     """
     rows = []
     for e in events:
-        if e.final_outcome != "TRADE_PLAN_ISSUED" or not e.trade_plan or not e.replay_outcome:
+        if e.final_outcome != "TRADE_PLAN_ISSUED" or not e.trade_plan:
             continue
         tp = e.trade_plan
-        out = e.replay_outcome
+        out = e.replay_outcome or {}
         rows.append({
             "Time (ET)": e.event_time.astimezone(_ET).strftime("%Y-%m-%d %H:%M"),
+            "Source": getattr(e, "source", "live"),
             "Bias": tp.get("bias"),
             "Setup": tp.get("setup_type"),
             "Conf": tp.get("confidence"),
@@ -173,7 +195,7 @@ def events_to_df(events: list[SignalEvent]) -> pd.DataFrame:
             "Stop": tp.get("stop_loss"),
             "TP1": tp.get("take_profit_1"),
             "R:R": tp.get("reward_risk_ratio"),
-            "Outcome": out.get("outcome") or "",
+            "Outcome": out.get("outcome") or "PENDING",
             "PnL (pts)": float(out["pnl_points"]) if "pnl_points" in out else None,
             "Min": int(out["minutes_elapsed"]) if "minutes_elapsed" in out else None,
         })

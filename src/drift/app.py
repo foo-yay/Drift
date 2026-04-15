@@ -36,6 +36,7 @@ class DriftApplication:
         self.config = config
         self.config_path = config_path
         self._dry_run = dry_run
+        self._source = "dry_run" if dry_run else "live"
         self.event_logger = EventLogger(config.storage.jsonl_event_log)
         self._provider = YFinanceProvider()
         self._engine = FeatureEngine(config)
@@ -108,6 +109,7 @@ class DriftApplication:
             event = SignalEvent(
                 event_time=datetime.now(tz=timezone.utc),
                 symbol=symbol,
+                source=self._source,
                 snapshot=snapshot.model_dump(mode="json"),
                 pre_gate_report=gate_report.model_dump(mode="json"),
                 final_outcome="BLOCKED",
@@ -132,6 +134,7 @@ class DriftApplication:
             event = SignalEvent(
                 event_time=datetime.now(tz=timezone.utc),
                 symbol=symbol,
+                source=self._source,
                 snapshot=snapshot.model_dump(mode="json"),
                 llm_decision_raw={"text": raw_text},
                 llm_decision_parsed=raw_dict,
@@ -154,6 +157,7 @@ class DriftApplication:
             event = SignalEvent(
                 event_time=datetime.now(tz=timezone.utc),
                 symbol=symbol,
+                source=self._source,
                 snapshot=snapshot.model_dump(mode="json"),
                 llm_decision_raw={"text": raw_text},
                 llm_decision_parsed=raw_dict,
@@ -174,6 +178,7 @@ class DriftApplication:
         event = SignalEvent(
             event_time=datetime.now(tz=timezone.utc),
             symbol=symbol,
+            source=self._source,
             snapshot=snapshot.model_dump(mode="json"),
             llm_decision_raw={"text": raw_text},
             llm_decision_parsed=raw_dict,
