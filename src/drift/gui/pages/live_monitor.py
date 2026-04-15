@@ -108,12 +108,12 @@ def page() -> None:
         label_visibility="collapsed",
     ) or _TF_DEFAULT_RANGE[tf]
 
-    # Overlay toggle stubs (Phase 10d will wire these up)
-    with st.expander("Overlays (coming in Phase 10d)", expanded=False):
-        col1, col2, col3 = st.columns(3)
-        col1.checkbox("EMAs",         value=False, disabled=True)
-        col2.checkbox("VWAP",         value=False, disabled=True)
-        col3.checkbox("Order Blocks", value=False, disabled=True)
+    # Overlay toggles
+    with st.expander("Overlays", expanded=False):
+        ov_col1, ov_col2, ov_col3 = st.columns(3)
+        show_emas   = ov_col1.checkbox("EMAs",         value=False, key="ov_emas")
+        show_vwap   = ov_col2.checkbox("VWAP",         value=False, key="ov_vwap")
+        show_obs    = ov_col3.checkbox("Order Blocks", value=False, key="ov_obs")
 
     # ------------------------------------------------------------------
     # Main layout: chart (left, 70%) + status panel (right, 30%)
@@ -124,7 +124,8 @@ def page() -> None:
         _render_status_panel(store)
 
     with chart_col:
-        _chart_fragment(symbol, tf, range_sel, store)
+        _chart_fragment(symbol, tf, range_sel, store,
+                        show_emas=show_emas, show_vwap=show_vwap, show_obs=show_obs)
 
     # ------------------------------------------------------------------
     # Macro events strip (bottom)
@@ -137,7 +138,15 @@ def page() -> None:
 # Chart fragment — auto-refreshes every 900 s
 # ---------------------------------------------------------------------------
 
-def _chart_fragment(symbol: str, tf: str, range_sel: str, store) -> None:
+def _chart_fragment(
+    symbol: str,
+    tf: str,
+    range_sel: str,
+    store,
+    show_emas: bool = False,
+    show_vwap: bool = False,
+    show_obs: bool = False,
+) -> None:
     """Wrapped in @st.fragment so it auto-refreshes independently."""
 
     @st.fragment(run_every=900)
@@ -169,7 +178,21 @@ def _chart_fragment(symbol: str, tf: str, range_sel: str, store) -> None:
         except Exception:  # noqa: BLE001
             signals = []
 
-        fig = build_candlestick_chart(bars, signals, timeframe=tf, height=500)
+        # Build overlay_data from the currently fetched bars (computed live so
+        # the values always match what's visible on the chart).  Order-block and
+        # rejection-block zones come from the most recent stored snapshot — they
+        # reflect the last full FeatureEngine run rather than a recomputation here.
+        overlay_data: dict = {}
+        if show_emas or show_vwap or show_obs:
+            overlay_data = _compute_overlay_data(bars, signals, show_emas, show_vwap, show_obs)
+
+        fig = build_candlestick_chart(
+            bars, signals, timeframe=tf, height=500,
+            show_emas=show_emas,
+            show_vwap=show_vwap,
+            show_order_blocks=show_obs,
+            overlay_data=overlay_data,
+        )
 
         # Offer click-to-detail via plotly selected point → session state
         selected = st.plotly_chart(
@@ -483,6 +506,79 @@ def _run_cycle_now(config) -> None:
     st.session_state["_show_run_output"] = True
     st.cache_resource.clear()  # force store to re-open on rerun
     st.rerun()  # re-render page so panel picks up new signal + dialog opens
+
+
+# ---------------------------------------------------------------------------
+# Overlay data helpers (Phase 11)
+# ---------------------------------------------------------------------------
+
+def _compute_overlay_data(
+    bars: list,
+    signals: list,
+    want_emas: bool,
+    want_vwap: bool,
+    want_obs: bool,
+) -> dict:
+    """Compute overlay values from the visible bars + most recent stored snapshot.
+
+    EMA and VWAP are derived from the currently fetched bars so they always
+    align with what's on screen.  Order/rejection blocks come from the last
+    stored MarketSnapshot (they require the full FeatureEngine run).
+    """
+    import pandas as pd
+    from zoneinfo import ZoneInfo as _ZI
+
+    od: dict = {}
+    if not bars:
+        return od
+
+    _ETZ = _ZI("America/New_York")
+
+    # Build a close/volume series from the bars list
+    closes  = [b.close  for b in bars]
+    highs   = [b.high   for b in bars]
+    lows    = [b.low    for b in bars]
+    volumes = [b.volume for b in bars]
+    ts_list = [b.timestamp for b in bars]
+
+    closes_s  = pd.Series(closes,  dtype=float)
+    volumes_s = pd.Series(volumes, dtype=float)
+
+    if want_emas:
+        for period in (9, 21, 50):
+            if len(closes_s) >= period:
+                ema_val = float(closes_s.ewm(span=period, adjust=False).mean().iloc[-1])
+                od[f"ema_{period}"] = ema_val
+
+    if want_vwap:
+        # Session VWAP — filter to today's RTH bars (9:30 ET onward)
+        import datetime as _dt
+        today_et = _dt.date.today()
+        rth_open_utc = _dt.datetime(
+            today_et.year, today_et.month, today_et.day,
+            14, 30,  # 09:30 ET = 14:30 UTC
+            tzinfo=_dt.timezone.utc,
+        )
+        tp = 0.0
+        vol_cum = 0.0
+        for i, b in enumerate(bars):
+            bar_ts = b.timestamp
+            if bar_ts.tzinfo is None:
+                bar_ts = bar_ts.replace(tzinfo=_dt.timezone.utc)
+            if bar_ts >= rth_open_utc:
+                typical = (b.high + b.low + b.close) / 3
+                tp      += typical * b.volume
+                vol_cum += b.volume
+        if vol_cum > 0:
+            od["vwap"] = tp / vol_cum
+
+    if want_obs and signals:
+        latest_snap = next((s.snapshot for s in signals if s.snapshot), None)
+        if latest_snap:
+            od["order_blocks"]     = latest_snap.get("order_blocks", [])
+            od["rejection_blocks"] = latest_snap.get("rejection_blocks", [])
+
+    return od
 
 
 # ---------------------------------------------------------------------------
