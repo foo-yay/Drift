@@ -311,7 +311,9 @@ def _run_cycle_now(config) -> None:
     from drift.gui.state import project_root
 
     config_path = str(project_root() / "config" / "settings.yaml")
-    sandbox = getattr(getattr(config, "app", None), "mode", "") == "sandbox"
+    # "sandbox" and "dry-run" both use MockLLMClient — consistent with CLI --dry-run flag
+    _MOCK_MODES = {"sandbox", "dry-run"}
+    sandbox = getattr(getattr(config, "app", None), "mode", "") in _MOCK_MODES
 
     # Redirect the module-level Rich console to a buffer for the duration of the run.
     buf = io.StringIO()
