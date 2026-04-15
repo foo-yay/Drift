@@ -140,6 +140,9 @@ class SignalStore:
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self._path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # WAL mode lets the GUI's read connection see committed rows from the
+        # scheduler's write connection without either blocking the other.
+        self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_DDL)
         self._conn.commit()
 

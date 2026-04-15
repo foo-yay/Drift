@@ -104,6 +104,7 @@ class BackgroundScheduler:
 
     def _run_cycle(self) -> None:
         from drift.app import DriftApplication
+        from drift.gui.state import _PROJECT_ROOT
         from drift.output import console as console_mod
         from drift.utils.config import load_app_config
         from rich.console import Console
@@ -115,7 +116,18 @@ class BackgroundScheduler:
         console_mod.console = capture
         try:
             config = load_app_config(self._config_path)
-            app = DriftApplication(config, config_path=self._config_path)
+            # Absolutize storage paths so the daemon thread always writes to
+            # the same files as the GUI reads, regardless of process CWD.
+            # Mirrors the pattern used by _run_cycle_now() in controls.py.
+            root = _PROJECT_ROOT
+            abs_storage = config.storage.model_copy(update={
+                "jsonl_event_log":         str(root / config.storage.jsonl_event_log),
+                "sqlite_path":             str(root / config.storage.sqlite_path),
+                "sandbox_jsonl_event_log": str(root / config.storage.sandbox_jsonl_event_log),
+                "sandbox_sqlite_path":     str(root / config.storage.sandbox_sqlite_path),
+            })
+            abs_config = config.model_copy(update={"storage": abs_storage})
+            app = DriftApplication(abs_config, config_path=self._config_path)
             app.run_once()
             self.state.record_run("success")
         except Exception as exc:  # noqa: BLE001
