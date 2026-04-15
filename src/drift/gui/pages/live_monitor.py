@@ -142,10 +142,6 @@ def _chart_fragment(symbol: str, tf: str, range_sel: str, store) -> None:
 
     @st.fragment(run_every=900)
     def _inner() -> None:
-        # Stamp wall-clock time so the countdown in the status panel knows
-        # when this fragment last ran (driven by run_every=900).
-        st.session_state["_last_cycle_wall_ts"] = time.monotonic()
-
         interval = _TF_INTERVAL[tf]
         lookback = _RANGE_LOOKBACK[tf][range_sel]
 
@@ -287,7 +283,7 @@ def _render_status_panel(store) -> None:
         if kill_path.exists():
             st.error("🔴 KILL SWITCH ACTIVE", icon="🚨")
         else:
-            _render_status_countdown(config)
+            _render_status_countdown(config, store)
     except Exception:  # noqa: BLE001
         st.caption("● Status unknown")
 
@@ -314,19 +310,42 @@ def _render_status_panel(store) -> None:
             _render_cycle_row(sig, key=f"cycle_{i}", latest=False)
 
 
-def _render_status_countdown(config) -> None:
-    """Live countdown fragment refreshing every 10 s."""
+def _render_status_countdown(config, store) -> None:
+    """Live countdown fragment refreshing every 10 s.
+
+    Derives elapsed time from the most recent signal in the DB so the
+    countdown survives page navigation, manual Run Now clicks, and CLI
+    background cycles — no session_state monotonic timestamps needed.
+    """
     @st.fragment(run_every=10)
     def _inner() -> None:
         loop_secs = getattr(getattr(config, "app", None), "loop_interval_seconds", 900)
-        last_ts = st.session_state.get("_last_cycle_wall_ts")
-        if last_ts is None:
+
+        try:
+            recent = store.query(limit=1, order_desc=True)
+            last_sig = recent[0] if recent else None
+        except Exception:  # noqa: BLE001
+            last_sig = None
+
+        if last_sig is None:
             st.markdown(
                 "<p style='margin:2px 0; color:#4caf50; font-size:0.85rem'>● Ready</p>",
                 unsafe_allow_html=True,
             )
             return
-        elapsed  = time.monotonic() - last_ts
+
+        try:
+            last_ts = datetime.fromisoformat(last_sig.event_time_utc)
+            if last_ts.tzinfo is None:
+                last_ts = last_ts.replace(tzinfo=timezone.utc)
+            elapsed = (datetime.now(tz=timezone.utc) - last_ts).total_seconds()
+        except (ValueError, TypeError):
+            st.markdown(
+                "<p style='margin:2px 0; color:#4caf50; font-size:0.85rem'>● Ready</p>",
+                unsafe_allow_html=True,
+            )
+            return
+
         remaining = max(0.0, loop_secs - elapsed)
         mins = int(remaining) // 60
         secs = int(remaining) % 60
