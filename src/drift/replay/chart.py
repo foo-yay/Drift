@@ -205,3 +205,117 @@ def events_to_df(events: list[SignalEvent]) -> pd.DataFrame:
     df["PnL (pts)"] = pd.to_numeric(df["PnL (pts)"], errors="coerce").astype("float64")
     df["Min"] = pd.to_numeric(df["Min"], errors="coerce").astype("Int64")
     return df
+
+
+def build_equity_chart(
+    trade_events: list[SignalEvent],
+) -> tuple[go.Figure, list[int]]:
+    """Build a Plotly equity curve with clickable scatter markers.
+
+    Each scatter point represents a resolved TRADE_PLAN_ISSUED event.
+    Clicking a point returns ``customdata`` = the index of that event in
+    *trade_events*, so the caller can open the right signal detail dialog.
+
+    Args:
+        trade_events: All TRADE_PLAN_ISSUED events (resolved and pending).
+
+    Returns:
+        ``(figure, resolved_indices)`` where ``resolved_indices[i]`` is the
+        index into *trade_events* for the i-th plotted point.
+    """
+    resolved = [(i, e) for i, e in enumerate(trade_events) if e.replay_outcome]
+
+    if not resolved:
+        fig = go.Figure()
+        fig.update_layout(
+            height=280,
+            paper_bgcolor="#111111",
+            plot_bgcolor="#111111",
+            font=dict(color="#888888", size=12),
+            annotations=[dict(
+                text="No resolved signals yet — run drift backfill-outcomes or a new replay",
+                x=0.5, y=0.5, xref="paper", yref="paper",
+                showarrow=False, font=dict(color="#666666", size=13),
+            )],
+            margin=dict(l=10, r=10, t=10, b=10),
+        )
+        return fig, []
+
+    resolved_indices = [i for i, _ in resolved]
+    times      = [e.event_time.astimezone(_ET) for _, e in resolved]
+    pnl_values = [float((e.replay_outcome or {}).get("pnl_points", 0.0)) for _, e in resolved]
+
+    running: list[float] = []
+    total = 0.0
+    for pnl in pnl_values:
+        total += pnl
+        running.append(round(total, 2))
+
+    colors = [
+        _OUTCOME_COLOR.get((e.replay_outcome or {}).get("outcome", ""), "#4488ff")
+        for _, e in resolved
+    ]
+    hover_texts = [
+        (
+            f"{(e.replay_outcome or {}).get('outcome', '')}  "
+            f"{'+' if pnl >= 0 else ''}{pnl:.1f} pts"
+        )
+        for pnl, (_, e) in zip(pnl_values, resolved)
+    ]
+
+    curve_color = "#00b386" if total >= 0 else "#e05252"
+    fill_color  = "rgba(0,179,134,0.12)" if total >= 0 else "rgba(224,82,82,0.12)"
+
+    fig = go.Figure()
+
+    # Background equity line (non-interactive)
+    fig.add_trace(go.Scatter(
+        x=times,
+        y=running,
+        mode="lines",
+        line=dict(color=curve_color, width=2),
+        fill="tozeroy",
+        fillcolor=fill_color,
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+
+    # Clickable scatter markers — one per resolved signal
+    fig.add_trace(go.Scatter(
+        x=times,
+        y=running,
+        mode="markers",
+        marker=dict(
+            color=colors,
+            size=11,
+            line=dict(width=1.5, color="#111111"),
+            symbol="circle",
+        ),
+        customdata=resolved_indices,
+        text=hover_texts,
+        hovertemplate=(
+            "%{x|%Y-%m-%d %H:%M ET}<br>"
+            "%{text}<br>"
+            "Cumulative: <b>%{y:.1f} pts</b>"
+            "<extra></extra>"
+        ),
+        showlegend=False,
+        name="signals",
+    ))
+
+    fig.update_layout(
+        height=280,
+        title=(
+            f"Equity Curve — {len(resolved)} resolved  |  "
+            f"Total: {'+' if total >= 0 else ''}{total:.1f} pts  "
+            f"(click a dot to view signal detail)"
+        ),
+        paper_bgcolor="#111111",
+        plot_bgcolor="#111111",
+        font=dict(color="#cccccc", size=11),
+        xaxis=dict(gridcolor="#1e1e1e", type="date"),
+        yaxis=dict(gridcolor="#1e1e1e", title="Cumulative PnL (pts)"),
+        margin=dict(l=10, r=10, t=44, b=10),
+        dragmode=False,
+    )
+    return fig, resolved_indices
