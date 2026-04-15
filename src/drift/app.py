@@ -74,7 +74,12 @@ class DriftApplication:
         )
         self._plan_builder = TradePlanBuilder(config)
 
-    def run_once(self) -> None:
+    def run_once(self) -> str:
+        """Run one analysis cycle and return the final_outcome string.
+
+        Returns one of: ``"BLOCKED"``, ``"LLM_NO_TRADE"``, ``"TRADE_PLAN_ISSUED"``,
+        ``"NO_DATA"`` (data fetch failed).
+        """
         render_startup(self.config, self.config_path, sandbox=self._sandbox)
 
         symbol = self.config.instrument.symbol
@@ -87,7 +92,7 @@ class DriftApplication:
             last_price = self._provider.get_latest_quote(symbol)
         except ValueError as exc:
             render_status(f"[red]data error:[/red] {exc} — skipping cycle")
-            return
+            return "NO_DATA"
 
         session = self._provider.get_session_status(symbol)
         bars_1m = self._provider.get_recent_bars(symbol, "1m", self.config.lookbacks.bars_1m)
@@ -134,7 +139,7 @@ class DriftApplication:
             )
             self.event_logger.append_event(event)
             render_success(f"blocked cycle logged to {self.config.storage.jsonl_event_log}")
-            return
+            return "BLOCKED"
 
         # ------------------------------------------------------------------
         # Log the cycle event (all gates passed)
@@ -162,7 +167,7 @@ class DriftApplication:
             self.event_logger.append_event(event)
             render_no_trade(decision, "LLM returned NO_TRADE.")
             render_success(f"no-trade cycle logged to {self.config.storage.jsonl_event_log}")
-            return
+            return "LLM_NO_TRADE"
 
         # ------------------------------------------------------------------
         # Trade plan construction (post-LLM deterministic gates)
@@ -185,7 +190,7 @@ class DriftApplication:
             self.event_logger.append_event(event)
             render_no_trade(decision, "Signal rejected by trade plan constraints (stop/R:R/confidence).")
             render_success(f"rejected cycle logged to {self.config.storage.jsonl_event_log}")
-            return
+            return "LLM_NO_TRADE"
 
         # ------------------------------------------------------------------
         # Emit the trade plan
@@ -209,6 +214,8 @@ class DriftApplication:
 
         if self.config.output.desktop_notifications:
             notify_signal(plan)
+
+        return "TRADE_PLAN_ISSUED"
 
     def run_forever(self) -> None:
         while True:

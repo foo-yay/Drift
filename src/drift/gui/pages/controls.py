@@ -120,7 +120,7 @@ def page() -> None:
         output  = st.session_state.get("_ctrl_output", "")
         error   = st.session_state.get("_ctrl_error", "")
 
-        if outcome == "success":
+        if outcome in {"TRADE_PLAN_ISSUED", "LLM_NO_TRADE", "BLOCKED", "NO_DATA", "unknown"}:
             st.success("Cycle completed.", icon="✅")
         elif outcome == "error":
             st.error(f"Cycle failed: {error}", icon="🚨")
@@ -194,7 +194,13 @@ def page() -> None:
             return f"in {mins}m {s:02d}s"
 
         outcome = snap["last_outcome"]
-        outcome_display = {"success": "✅ Success", "error": "❌ Error"}.get(outcome, outcome or "—")
+        outcome_display = {
+            "TRADE_PLAN_ISSUED": "📈 Trade Plan",
+            "LLM_NO_TRADE":     "⏸ No Trade",
+            "BLOCKED":          "🚫 Blocked",
+            "NO_DATA":          "⚠️ No Data",
+            "error":            "❌ Error",
+        }.get(outcome, outcome or "—")
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Last cycle", _fmt_et(last_run), delta=_elapsed(last_run), delta_color="off")
@@ -247,12 +253,12 @@ def _run_cycle(config) -> None:
     orig = console_mod.console
     console_mod.console = capture
 
-    outcome   = "success"
+    outcome   = "unknown"
     error_msg = ""
     try:
         app = DriftApplication(abs_config, config_path=config_path, sandbox=sandbox, manual_run=not sandbox)
         with st.spinner("Running analysis cycle…"):
-            app.run_once()
+            outcome = app.run_once() or "unknown"
     except Exception as exc:  # noqa: BLE001
         outcome   = "error"
         error_msg = str(exc)

@@ -128,8 +128,8 @@ class BackgroundScheduler:
             })
             abs_config = config.model_copy(update={"storage": abs_storage})
             app = DriftApplication(abs_config, config_path=self._config_path)
-            app.run_once()
-            self.state.record_run("success")
+            outcome = app.run_once() or "unknown"
+            self.state.record_run(outcome)
         except Exception as exc:  # noqa: BLE001
             log.exception("Scheduler cycle error: %s", exc)
             self.state.record_run("error", str(exc))
