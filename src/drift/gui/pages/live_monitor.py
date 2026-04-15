@@ -22,6 +22,7 @@ from __future__ import annotations
 import warnings
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+import time
 
 import streamlit as st
 
@@ -104,15 +105,19 @@ def _chart_fragment(symbol: str, tf: str, store) -> None:
         interval, lookback = _TF_CONFIG[tf]
 
         with st.spinner(f"Fetching {symbol} {tf} bars…"):
-            bars = _fetch_bars(symbol, interval, lookback)
+            bars = _get_bars_cached(symbol, interval, lookback)
 
         if not bars:
-            st.warning(
+            col_warn, col_btn = st.columns([4, 1])
+            col_warn.warning(
                 f"No {tf} bar data returned for **{symbol}**. "
                 "Yahoo Finance may be rate-limited or the market is closed. "
                 "The chart will auto-refresh in 15 min.",
-                icon="⚠️",
+                icon="\u26a0\ufe0f",
             )
+            if col_btn.button("Retry", key=f"retry_{tf}", use_container_width=True):
+                _bust_bar_cache(symbol, interval, lookback)
+                st.rerun(scope="fragment")
             return
 
         # Signal markers: last 7 days from SQLite
@@ -207,12 +212,43 @@ def _open_store(config):
     return get_store(config)
 
 
-@st.cache_data(ttl=60, show_spinner=False)
-def _fetch_bars(symbol: str, interval: str, lookback: int):
-    """Fetch bars; cached for 60 s to avoid hammering yfinance on every rerun."""
+def _bar_cache_key(symbol: str, interval: str, lookback: int) -> str:
+    return f"_bars_{symbol}_{interval}_{lookback}"
+
+
+def _bar_ts_key(symbol: str, interval: str, lookback: int) -> str:
+    return f"_bars_ts_{symbol}_{interval}_{lookback}"
+
+
+def _get_bars_cached(symbol: str, interval: str, lookback: int) -> list:
+    """Return bars from session-state cache, refreshing at most every 60 s.
+
+    Crucially, a failed/empty fetch does NOT overwrite a previously good
+    result — so a transient yfinance blip won't blank the chart.
+    """
+    cache_key = _bar_cache_key(symbol, interval, lookback)
+    ts_key    = _bar_ts_key(symbol, interval, lookback)
+
+    last_ts = st.session_state.get(ts_key, 0.0)
+    if time.monotonic() - last_ts > 60:
+        fresh = _fetch_bars_uncached(symbol, interval, lookback)
+        st.session_state[ts_key] = time.monotonic()  # always bump throttle timer
+        if fresh:  # only replace cache on success
+            st.session_state[cache_key] = fresh
+
+    return st.session_state.get(cache_key, [])
+
+
+def _bust_bar_cache(symbol: str, interval: str, lookback: int) -> None:
+    """Force the next call to _get_bars_cached to hit yfinance immediately."""
+    ts_key = _bar_ts_key(symbol, interval, lookback)
+    st.session_state.pop(ts_key, None)
+
+
+def _fetch_bars_uncached(symbol: str, interval: str, lookback: int) -> list:
+    """Single attempt at fetching bars — no caching, no Streamlit dependencies."""
     from drift.data.providers.yfinance_provider import YFinanceProvider
-    provider = YFinanceProvider()
     try:
-        return provider.get_recent_bars(symbol, interval, lookback)
+        return YFinanceProvider().get_recent_bars(symbol, interval, lookback)
     except Exception:  # noqa: BLE001
         return []
