@@ -108,12 +108,12 @@ def page() -> None:
         label_visibility="collapsed",
     ) or _TF_DEFAULT_RANGE[tf]
 
-    # Overlay toggle stubs (Phase 10d will wire these up)
-    with st.expander("Overlays (coming in Phase 10d)", expanded=False):
-        col1, col2, col3 = st.columns(3)
-        col1.checkbox("EMAs",         value=False, disabled=True)
-        col2.checkbox("VWAP",         value=False, disabled=True)
-        col3.checkbox("Order Blocks", value=False, disabled=True)
+    # Overlay toggles
+    with st.expander("Overlays", expanded=False):
+        ov_col1, ov_col2, ov_col3 = st.columns(3)
+        show_emas   = ov_col1.checkbox("EMAs",         value=False, key="ov_emas")
+        show_vwap   = ov_col2.checkbox("VWAP",         value=False, key="ov_vwap")
+        show_obs    = ov_col3.checkbox("Order Blocks", value=False, key="ov_obs")
 
     # ------------------------------------------------------------------
     # Main layout: chart (left, 70%) + status panel (right, 30%)
@@ -124,7 +124,8 @@ def page() -> None:
         _render_status_panel(store)
 
     with chart_col:
-        _chart_fragment(symbol, tf, range_sel, store)
+        _chart_fragment(symbol, tf, range_sel, store,
+                        show_emas=show_emas, show_vwap=show_vwap, show_obs=show_obs)
 
     # ------------------------------------------------------------------
     # Macro events strip (bottom)
@@ -137,7 +138,15 @@ def page() -> None:
 # Chart fragment — auto-refreshes every 900 s
 # ---------------------------------------------------------------------------
 
-def _chart_fragment(symbol: str, tf: str, range_sel: str, store) -> None:
+def _chart_fragment(
+    symbol: str,
+    tf: str,
+    range_sel: str,
+    store,
+    show_emas: bool = False,
+    show_vwap: bool = False,
+    show_obs: bool = False,
+) -> None:
     """Wrapped in @st.fragment so it auto-refreshes independently."""
 
     @st.fragment(run_every=900)
@@ -169,7 +178,21 @@ def _chart_fragment(symbol: str, tf: str, range_sel: str, store) -> None:
         except Exception:  # noqa: BLE001
             signals = []
 
-        fig = build_candlestick_chart(bars, signals, timeframe=tf, height=500)
+        # Build overlay_data from the currently fetched bars (computed live so
+        # the values always match what's visible on the chart).  Order-block and
+        # rejection-block zones come from the most recent stored snapshot — they
+        # reflect the last full FeatureEngine run rather than a recomputation here.
+        overlay_data: dict = {}
+        if show_emas or show_vwap or show_obs:
+            overlay_data = _compute_overlay_data(bars, signals, show_emas, show_vwap, show_obs)
+
+        fig = build_candlestick_chart(
+            bars, signals, timeframe=tf, height=500,
+            show_emas=show_emas,
+            show_vwap=show_vwap,
+            show_order_blocks=show_obs,
+            overlay_data=overlay_data,
+        )
 
         # Offer click-to-detail via plotly selected point → session state
         selected = st.plotly_chart(
@@ -483,6 +506,32 @@ def _run_cycle_now(config) -> None:
     st.session_state["_show_run_output"] = True
     st.cache_resource.clear()  # force store to re-open on rerun
     st.rerun()  # re-render page so panel picks up new signal + dialog opens
+
+
+# ---------------------------------------------------------------------------
+# Overlay data helpers (Phase 11)
+# ---------------------------------------------------------------------------
+
+def _compute_overlay_data(
+    bars: list,
+    signals: list,
+    want_emas: bool,
+    want_vwap: bool,
+    want_obs: bool,
+) -> dict:
+    """Fetch overlay data needed by the chart builder.
+
+    EMAs and VWAP are computed inside ``build_candlestick_chart`` directly
+    from the bars, so this function only needs to supply order/rejection block
+    zones from the most recent stored MarketSnapshot.
+    """
+    od: dict = {}
+    if want_obs and signals:
+        latest_snap = next((s.snapshot for s in signals if s.snapshot), None)
+        if latest_snap:
+            od["order_blocks"]     = latest_snap.get("order_blocks", [])
+            od["rejection_blocks"] = latest_snap.get("rejection_blocks", [])
+    return od
 
 
 # ---------------------------------------------------------------------------

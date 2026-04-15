@@ -170,6 +170,131 @@ class TestSignalHover:
 
 
 # ---------------------------------------------------------------------------
+# Phase 11 — overlay rendering
+# ---------------------------------------------------------------------------
+
+class TestOverlays:
+    """Verify that overlay flags produce the correct Plotly traces/shapes."""
+
+    def _bars(self, n: int = 20) -> list[Bar]:
+        return [_make_bar(i * 5) for i in range(n)]
+
+    def test_no_overlays_by_default(self) -> None:
+        """Default call produces no EMA/VWAP scatter traces."""
+        bars = self._bars()
+        fig = build_candlestick_chart(bars, [])
+        scatter_names = [t.name for t in fig.data if type(t).__name__ == "Scatter"]
+        for name in scatter_names:
+            assert "EMA" not in name
+            assert "VWAP" not in name
+
+    def test_ema_traces_added_when_flag_set(self) -> None:
+        # Need enough bars to compute EMAs (at least 50)
+        bars = self._bars(60)
+        fig = build_candlestick_chart(bars, [], show_emas=True)
+        scatter_names = [t.name for t in fig.data if type(t).__name__ == "Scatter"]
+        assert "EMA 9" in scatter_names
+        assert "EMA 21" in scatter_names
+        assert "EMA 50" in scatter_names
+
+    def test_ema_series_has_one_value_per_bar(self) -> None:
+        """EMA traces must have the same length as the bars list."""
+        bars = self._bars(60)
+        fig = build_candlestick_chart(bars, [], show_emas=True)
+        ema9 = next(t for t in fig.data if type(t).__name__ == "Scatter" and t.name == "EMA 9")
+        assert len(ema9.y) == len(bars)
+
+    def test_ema_flag_false_suppresses_traces(self) -> None:
+        bars = self._bars(60)
+        fig = build_candlestick_chart(bars, [], show_emas=False)
+        scatter_names = [t.name for t in fig.data if type(t).__name__ == "Scatter"]
+        assert "EMA 9" not in scatter_names
+
+    def test_vwap_trace_added_when_flag_set(self) -> None:
+        # Bars must fall on or after 14:30 UTC (RTH open) for VWAP to appear
+        from datetime import timezone
+        bars = [
+            Bar(
+                timestamp=_TS + timedelta(minutes=i * 5),
+                open=21000.0, high=21010.0, low=20990.0, close=21005.0,
+                volume=1000.0, timeframe="5m", symbol="MNQ",
+            )
+            for i in range(10)
+        ]
+        fig = build_candlestick_chart(bars, [], show_vwap=True)
+        scatter_names = [t.name for t in fig.data if type(t).__name__ == "Scatter"]
+        assert "VWAP" in scatter_names
+
+    def test_vwap_series_grows_with_bars(self) -> None:
+        """Each VWAP point must be a cumulative average — strictly non-trivial length."""
+        bars = [
+            Bar(
+                timestamp=_TS + timedelta(minutes=i * 5),
+                open=21000.0, high=21010.0, low=20990.0, close=21005.0,
+                volume=1000.0, timeframe="5m", symbol="MNQ",
+            )
+            for i in range(10)
+        ]
+        fig = build_candlestick_chart(bars, [], show_vwap=True)
+        vwap_trace = next(t for t in fig.data if type(t).__name__ == "Scatter" and t.name == "VWAP")
+        assert len(vwap_trace.y) == len(bars)
+
+    def test_vwap_flag_false_suppresses_trace(self) -> None:
+        bars = self._bars()
+        fig = build_candlestick_chart(bars, [], show_vwap=False)
+        scatter_names = [t.name for t in fig.data if type(t).__name__ == "Scatter"]
+        assert "VWAP" not in scatter_names
+
+    def test_order_block_shapes_added(self) -> None:
+        bars = self._bars()
+        od = {
+            "order_blocks": [
+                {"direction": "bullish", "top": 21010.0, "bottom": 21000.0,
+                 "formed_at": _TS.isoformat(), "is_fresh": True},
+                {"direction": "bearish", "top": 21050.0, "bottom": 21040.0,
+                 "formed_at": _TS.isoformat(), "is_fresh": False},
+            ],
+            "rejection_blocks": [],
+        }
+        fig = build_candlestick_chart(bars, [], show_order_blocks=True, overlay_data=od)
+        # Two order blocks → two rect shapes
+        rect_shapes = [s for s in fig.layout.shapes if s.type == "rect"]
+        assert len(rect_shapes) == 2
+
+    def test_rejection_block_lines_added(self) -> None:
+        bars = self._bars()
+        od = {
+            "order_blocks": [],
+            "rejection_blocks": [
+                {"direction": "bearish_rejection", "level": 21060.0,
+                 "wick_start": 21045.0, "wick_end": 21060.0,
+                 "formed_at": _TS.isoformat(), "strength_pct": 62.0},
+            ],
+        }
+        fig = build_candlestick_chart(bars, [], show_order_blocks=True, overlay_data=od)
+        line_shapes = [s for s in fig.layout.shapes if s.type == "line"]
+        assert len(line_shapes) >= 1
+
+    def test_order_blocks_flag_false_produces_no_shapes(self) -> None:
+        bars = self._bars()
+        od = {
+            "order_blocks": [
+                {"direction": "bullish", "top": 21010.0, "bottom": 21000.0,
+                 "formed_at": _TS.isoformat(), "is_fresh": True},
+            ],
+            "rejection_blocks": [],
+        }
+        fig = build_candlestick_chart(bars, [], show_order_blocks=False, overlay_data=od)
+        assert len(fig.layout.shapes) == 0
+
+    def test_none_overlay_data_safe(self) -> None:
+        """Passing overlay_data=None with show_emas=True should not raise."""
+        bars = self._bars()
+        fig = build_candlestick_chart(bars, [], show_emas=True, overlay_data=None)
+        assert isinstance(fig, go.Figure)
+
+
+# ---------------------------------------------------------------------------
 # State module — project root discovery
 # ---------------------------------------------------------------------------
 
