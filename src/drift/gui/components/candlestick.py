@@ -152,22 +152,6 @@ def build_candlestick_chart(
             gridcolor="#2a2a2a",
             tickformat="%H:%M<br>%b %d",
             title="Time (ET)",
-            rangeselector=dict(
-                buttons=[
-                    dict(count=1,  label="1H",  step="hour",  stepmode="backward"),
-                    dict(count=4,  label="4H",  step="hour",  stepmode="backward"),
-                    dict(count=1,  label="1D",  step="day",   stepmode="backward"),
-                    dict(count=7,  label="1W",  step="day",   stepmode="backward"),
-                    dict(count=1,  label="1M",  step="month", stepmode="backward"),
-                    dict(step="all", label="All"),
-                ],
-                activecolor="#1f77b4",
-                bgcolor="#1a1a2e",
-                bordercolor="#333",
-                font=dict(color="#fafafa", size=11),
-                x=0,
-                y=1.02,
-            ),
         ),
         yaxis=dict(
             title="Price",
@@ -185,8 +169,8 @@ def build_candlestick_chart(
         plot_bgcolor="#0e1117",
         paper_bgcolor="#0e1117",
         font=dict(color="#fafafa"),
-        legend=dict(orientation="h", y=1.12, x=0),
-        margin=dict(l=20, r=60, t=80, b=40),
+        legend=dict(orientation="h", y=1.06, x=0),
+        margin=dict(l=20, r=60, t=60, b=20),
     )
     return fig
 

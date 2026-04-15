@@ -37,11 +37,33 @@ from drift.gui.state import get_config, get_store
 
 _ET = ZoneInfo("America/New_York")
 
-# Timeframe → (yf interval, lookback bars)
-_TF_CONFIG: dict[str, tuple[str, int]] = {
-    "1m":  ("1m",  180),
-    "5m":  ("5m",  120),
-    "1H":  ("1h",   48),
+# yfinance interval string per timeframe label
+_TF_INTERVAL: dict[str, str] = {
+    "1m": "1m",
+    "5m": "5m",
+    "1H": "1h",
+}
+
+# Which range options to show for each timeframe
+_TF_RANGES: dict[str, list[str]] = {
+    "1m": ["1H", "4H", "1D", "All"],
+    "5m": ["1H", "4H", "1D", "1W", "1M", "All"],
+    "1H": ["1D", "1W", "1M", "All"],
+}
+
+# Default range shown when switching to a timeframe
+_TF_DEFAULT_RANGE: dict[str, str] = {
+    "1m": "1D",
+    "5m": "1D",
+    "1H": "1W",
+}
+
+# Lookback bars to fetch for each (timeframe, range) combination.
+# yfinance hard limits: 1m → 7 d, 5m → 60 d, 1h → 730 d.
+_RANGE_LOOKBACK: dict[str, dict[str, int]] = {
+    "1m": {"1H": 60,   "4H": 240,  "1D": 390,  "All": 2700},
+    "5m": {"1H": 12,   "4H": 48,   "1D": 78,   "1W": 390,  "1M": 1560, "All": 9000},
+    "1H": {"1D": 24,   "1W": 168,  "1M": 744,  "All": 8760},
 }
 
 
@@ -57,16 +79,30 @@ def page() -> None:
     filter_ctry = list(getattr(config.calendar, "filter_countries", ["USD"]))
 
     # ------------------------------------------------------------------
-    # Timeframe selector (outside the fragment — controls full page rerun)
+    # Timeframe + range selectors (outside the fragment — trigger re-fetch)
     # ------------------------------------------------------------------
-    tf = st.radio(
+    sel_col, range_col = st.columns([1, 3])
+    tf = sel_col.radio(
         "Timeframe",
-        list(_TF_CONFIG.keys()),
+        list(_TF_INTERVAL.keys()),
         index=1,          # default 5m
         horizontal=True,
         label_visibility="collapsed",
         key="live_tf",
     )
+
+    available_ranges = _TF_RANGES[tf]
+    # When the user switches timeframe reset to the default range for that tf.
+    range_key = f"live_range_{tf}"
+    if range_key not in st.session_state:
+        st.session_state[range_key] = _TF_DEFAULT_RANGE[tf]
+    range_sel = range_col.segmented_control(
+        "Range",
+        available_ranges,
+        default=st.session_state[range_key],
+        key=range_key,
+        label_visibility="collapsed",
+    ) or _TF_DEFAULT_RANGE[tf]
 
     # Overlay toggle stubs (Phase 10d will wire these up)
     with st.expander("Overlays (coming in Phase 10d)", expanded=False):
@@ -84,7 +120,7 @@ def page() -> None:
         _render_status_panel(store)
 
     with chart_col:
-        _chart_fragment(symbol, tf, store)
+        _chart_fragment(symbol, tf, range_sel, store)
 
     # ------------------------------------------------------------------
     # Macro events strip (bottom)
@@ -97,14 +133,15 @@ def page() -> None:
 # Chart fragment — auto-refreshes every 900 s
 # ---------------------------------------------------------------------------
 
-def _chart_fragment(symbol: str, tf: str, store) -> None:
+def _chart_fragment(symbol: str, tf: str, range_sel: str, store) -> None:
     """Wrapped in @st.fragment so it auto-refreshes independently."""
 
     @st.fragment(run_every=900)
     def _inner() -> None:
-        interval, lookback = _TF_CONFIG[tf]
+        interval = _TF_INTERVAL[tf]
+        lookback = _RANGE_LOOKBACK[tf][range_sel]
 
-        with st.spinner(f"Fetching {symbol} {tf} bars…"):
+        with st.spinner(f"Fetching {symbol} {tf} · {range_sel} ({lookback} bars)…"):
             bars = _get_bars_cached(symbol, interval, lookback)
 
         if not bars:
@@ -115,15 +152,16 @@ def _chart_fragment(symbol: str, tf: str, store) -> None:
                 "The chart will auto-refresh in 15 min.",
                 icon="\u26a0\ufe0f",
             )
-            if col_btn.button("Retry", key=f"retry_{tf}", use_container_width=True):
+            if col_btn.button("Retry", key=f"retry_{tf}_{range_sel}", use_container_width=True):
                 _bust_bar_cache(symbol, interval, lookback)
                 st.rerun(scope="fragment")
             return
 
-        # Signal markers: last 7 days from SQLite
-        seven_days_ago = date.today() - timedelta(days=7)
+        # Signal markers: expand query window to match the loaded range
+        range_days = max(7, lookback * {"1m": 1, "5m": 5, "1h": 60}.get(_TF_INTERVAL[tf], 5) // (390))
+        range_start = date.today() - timedelta(days=range_days)
         try:
-            signals = store.query(date_start=seven_days_ago)
+            signals = store.query(date_start=range_start)
         except Exception:  # noqa: BLE001
             signals = []
 
