@@ -211,8 +211,14 @@ def _handle_chart_click(selected: dict | None, signals: list) -> None:
 # ---------------------------------------------------------------------------
 
 def _render_status_panel(store) -> None:
-    """Shows gate results + last trade plan from the most recent SQLite signal."""
-    st.markdown("**Engine Status**")
+    """Shows engine status, Run Now button, gate results, and last trade plan."""
+    config = _load_config()
+
+    hdr_col, btn_col = st.columns([2, 1])
+    hdr_col.markdown("**Engine Status**")
+
+    if btn_col.button("▶ Run Now", key="run_now_btn", use_container_width=True, type="primary"):
+        _run_cycle_now(config, store)
 
     try:
         from drift.gui.state import project_root
@@ -220,9 +226,13 @@ def _render_status_panel(store) -> None:
         if kill_path.exists():
             st.error("🔴 KILL SWITCH ACTIVE", icon="🚨")
         else:
-            st.success("● Running", icon="✅")
+            st.success("● Engine ready", icon="✅")
     except Exception:  # noqa: BLE001
         st.info("● Status unknown")
+
+    loop_secs = getattr(getattr(config, "app", None), "loop_interval_seconds", None)
+    if loop_secs:
+        st.caption(f"Auto-loop: every {loop_secs // 60} min {loop_secs % 60:02d} s" if loop_secs % 60 else f"Auto-loop: every {loop_secs // 60} min")
 
     st.divider()
 
@@ -234,6 +244,25 @@ def _render_status_panel(store) -> None:
 
     render_gate_status(last_sig)
     render_last_trade_plan(last_sig)
+
+
+def _run_cycle_now(config, store) -> None:
+    """Run a single DriftApplication cycle immediately and refresh the panel."""
+    from drift.app import DriftApplication
+    from drift.gui.state import project_root
+
+    config_path = str(project_root() / "config" / "settings.yaml")
+    sandbox = getattr(getattr(config, "app", None), "mode", "") == "sandbox"
+
+    try:
+        app = DriftApplication(config, config_path=config_path, sandbox=sandbox)
+        with st.spinner("Running analysis cycle…"):
+            app.run_once()
+        st.toast("✅ Cycle complete — results saved to store.", icon="✅")
+        # Bust the store cache so the panel immediately shows the new signal
+        st.cache_resource.clear()
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Run failed: {exc}", icon="🚨")
 
 
 # ---------------------------------------------------------------------------
