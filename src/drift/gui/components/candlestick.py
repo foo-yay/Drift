@@ -7,12 +7,22 @@ from __future__ import annotations
 
 from datetime import date, timedelta, timezone
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 import plotly.graph_objects as go
 
 if TYPE_CHECKING:
     from drift.models import Bar
     from drift.storage.signal_store import SignalRow
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _to_et(ts):
+    """Return a timezone-aware datetime in US/Eastern for x-axis display."""
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(_ET)
 
 # Marker config per outcome category
 _LONG_MARKER = dict(symbol="triangle-up", size=12, color="limegreen",
@@ -55,7 +65,7 @@ def build_candlestick_chart(
     fig = go.Figure()
 
     if bars:
-        ts   = [b.timestamp for b in bars]
+        ts   = [_to_et(b.timestamp) for b in bars]
         o    = [b.open for b in bars]
         h    = [b.high for b in bars]
         lo   = [b.low for b in bars]
@@ -109,15 +119,18 @@ def build_candlestick_chart(
             if sig_ts < min_bar or sig_ts > max_bar:
                 continue
 
-            # Find closest bar for y-positioning
-            closest = min(bars, key=lambda b: abs((b.timestamp - sig_ts).total_seconds()))
+            # Convert to ET so the marker aligns with the ET x-axis
+            sig_ts_et = _to_et(sig_ts)
+
+            # Find closest bar for y-positioning (compare in UTC)
+            closest = min(bars, key=lambda b, s=sig_ts: abs((b.timestamp - s).total_seconds()))
             if (sig.bias or "").upper() == "LONG" and sig.final_outcome == "TRADE_PLAN_ISSUED":
-                groups["LONG"].append((sig_ts, closest.low * 0.9995, sig))
+                groups["LONG"].append((sig_ts_et, closest.low * 0.9995, sig))
             elif (sig.bias or "").upper() == "SHORT" and sig.final_outcome == "TRADE_PLAN_ISSUED":
-                groups["SHORT"].append((sig_ts, closest.high * 1.0005, sig))
+                groups["SHORT"].append((sig_ts_et, closest.high * 1.0005, sig))
             else:
                 mid = (closest.high + closest.low) / 2
-                groups["OTHER"].append((sig_ts, mid, sig))
+                groups["OTHER"].append((sig_ts_et, mid, sig))
 
         _add_signal_trace(fig, groups["LONG"], "LONG", _LONG_MARKER)
         _add_signal_trace(fig, groups["SHORT"], "SHORT", _SHORT_MARKER)
@@ -133,7 +146,29 @@ def build_candlestick_chart(
         title=dict(text=title, font=dict(size=15)),
         height=height,
         xaxis_rangeslider_visible=False,
-        xaxis=dict(type="date", showgrid=True, gridcolor="#2a2a2a"),
+        xaxis=dict(
+            type="date",
+            showgrid=True,
+            gridcolor="#2a2a2a",
+            tickformat="%H:%M<br>%b %d",
+            title="Time (ET)",
+            rangeselector=dict(
+                buttons=[
+                    dict(count=1,  label="1H",  step="hour",  stepmode="backward"),
+                    dict(count=4,  label="4H",  step="hour",  stepmode="backward"),
+                    dict(count=1,  label="1D",  step="day",   stepmode="backward"),
+                    dict(count=7,  label="1W",  step="day",   stepmode="backward"),
+                    dict(count=1,  label="1M",  step="month", stepmode="backward"),
+                    dict(step="all", label="All"),
+                ],
+                activecolor="#1f77b4",
+                bgcolor="#1a1a2e",
+                bordercolor="#333",
+                font=dict(color="#fafafa", size=11),
+                x=0,
+                y=1.02,
+            ),
+        ),
         yaxis=dict(
             title="Price",
             side="right",
@@ -150,8 +185,8 @@ def build_candlestick_chart(
         plot_bgcolor="#0e1117",
         paper_bgcolor="#0e1117",
         font=dict(color="#fafafa"),
-        legend=dict(orientation="h", y=1.06, x=0),
-        margin=dict(l=20, r=60, t=60, b=20),
+        legend=dict(orientation="h", y=1.12, x=0),
+        margin=dict(l=20, r=60, t=80, b=40),
     )
     return fig
 
