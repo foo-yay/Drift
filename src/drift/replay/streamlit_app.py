@@ -9,7 +9,8 @@ Or via the CLI alias:
 The GUI is a pure viewer — all signal generation stays in the CLI:
     drift run                  live trading loop
     drift replay               historical replay
-    drift backfill-outcomes    resolve pending live signals
+
+Pending live signals are resolved automatically on startup and on Refresh Log.
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ load_dotenv()
 import streamlit as st
 
 from drift.replay.chart import build_equity_chart, events_to_df
+from drift.storage.backfill import backfill_outcomes
 from drift.storage.reader import load_events_from_log
 
 # ------------------------------------------------------------------
@@ -88,18 +90,26 @@ def _show_signal_detail(event) -> None:
 
 
 # ------------------------------------------------------------------
-# Auto-load events from the JSONL log
+# Auto-load events from the JSONL log (runs backfill first)
 # ------------------------------------------------------------------
 
+_SYMBOL = "MNQ=F"  # resolved from config; hardcoded here to avoid loading config on every rerun
 
-def _load_events() -> list:
+
+def _load_events() -> tuple[list, int]:
+    """Backfill any pending live signals then return (events, resolved_count)."""
     if not _LOG_PATH.exists():
-        return []
-    return load_events_from_log(_LOG_PATH)
+        return [], 0
+    try:
+        resolved, _ = backfill_outcomes(_LOG_PATH, _SYMBOL)
+    except Exception:  # noqa: BLE001 — never crash the GUI
+        resolved = 0
+    return load_events_from_log(_LOG_PATH), resolved
 
 
 if "all_events" not in st.session_state:
-    st.session_state["all_events"] = _load_events()
+    st.session_state["all_events"], _startup_resolved = _load_events()
+    st.session_state["_startup_resolved"] = _startup_resolved
 
 
 # ------------------------------------------------------------------
@@ -111,7 +121,10 @@ with st.sidebar:
     st.divider()
 
     if st.button("🔄 Refresh Log", type="primary", use_container_width=True):
-        st.session_state["all_events"] = _load_events()
+        with st.spinner("Resolving pending signals…"):
+            events, resolved = _load_events()
+        st.session_state["all_events"] = events
+        st.session_state["_refresh_resolved"] = resolved
         for _k in ("selected_idx", "_dialog_shown_for", "page"):
             st.session_state.pop(_k, None)
         st.rerun()
@@ -153,14 +166,20 @@ with st.sidebar:
     st.caption(
         "Generate signals via CLI:\n"
         "```\ndrift run\ndrift replay\n```\n"
-        "Resolve pending signals:\n"
-        "```\ndrift backfill-outcomes\n```"
+        "Pending outcomes are resolved automatically on refresh."
     )
 
 
 # ------------------------------------------------------------------
 # Apply filters
 # ------------------------------------------------------------------
+
+# Show a toast when backfill resolved new outcomes (startup or refresh)
+_notify_resolved = st.session_state.pop("_refresh_resolved", None)
+if _notify_resolved is None:
+    _notify_resolved = st.session_state.pop("_startup_resolved", None)
+if _notify_resolved:
+    st.toast(f"✅ Resolved {_notify_resolved} pending signal(s) automatically.", icon="✅")
 
 
 def _src_ok(e) -> bool:
