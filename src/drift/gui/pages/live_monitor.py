@@ -254,18 +254,27 @@ def _render_status_panel(store) -> None:
         }
         /* Details link-style buttons inside cycle rows */
         div[data-testid="stButton"] button:not([kind="primary"]) {
-            background:    transparent !important;
-            border:        none !important;
-            padding:       0 4px !important;
-            font-size:     0.75rem !important;
-            color:         #888 !important;
+            background:      transparent !important;
+            border:          none !important;
+            padding:         0 4px !important;
+            font-size:       0.75rem !important;
+            color:           #888 !important;
             text-decoration: underline !important;
-            min-height:    unset !important;
-            line-height:   1.4 !important;
-            box-shadow:    none !important;
+            min-height:      unset !important;
+            line-height:     1.4 !important;
+            box-shadow:      none !important;
         }
         div[data-testid="stButton"] button:not([kind="primary"]):hover {
             color: #ccc !important;
+        }
+        /* Remove the wrapper margins that cause vertical misalignment */
+        div[data-testid="stButton"]:has(button:not([kind="primary"])) {
+            margin:  0 !important;
+            padding: 0 !important;
+        }
+        div.stElementContainer:has(button:not([kind="primary"])) {
+            margin:  0 !important;
+            padding: 0 !important;
         }
         </style>
         """,
