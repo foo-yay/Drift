@@ -2,7 +2,7 @@ app:
   name: Drift
   timezone: America/New_York
   loop_interval_seconds: 900
-  mode: dry-run
+  mode: paper-live
   log_level: INFO
 
 instrument:

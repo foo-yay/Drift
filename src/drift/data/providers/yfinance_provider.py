@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import logging
 import warnings
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import yfinance as yf
 
+# Silence yfinance's logger-based noise.
+logging.getLogger("yfinance").setLevel(logging.ERROR)
+# yfinance also calls print() directly for some warnings (e.g. "possibly delisted").
+# Those only appear in the Streamlit server terminal, not in the UI itself.
+
 # yfinance uses pd.Timestamp.utcnow() which is deprecated in pandas 4.
-# Suppress until yfinance ships a fix.
-warnings.filterwarnings("ignore", message="Timestamp.utcnow", category=FutureWarning)
+# Suppress until yfinance ships a fix.  Omit category= because pandas 4
+# emits Pandas4Warning which is not guaranteed to subclass FutureWarning.
+warnings.filterwarnings("ignore", message="Timestamp.utcnow")
 
 from drift.data.providers.base import MarketDataProvider
 from drift.models import Bar
@@ -88,12 +95,25 @@ class YFinanceProvider(MarketDataProvider):
 
         days = _calendar_days_needed(timeframe, lookback)
         ticker = self._get_ticker(symbol)
+        interval = _TIMEFRAME_TO_INTERVAL[timeframe]
 
-        df = ticker.history(
-            period=f"{days}d",
-            interval=_TIMEFRAME_TO_INTERVAL[timeframe],
-            auto_adjust=True,
-        )
+        # Build two candidate call signatures: period= first, then explicit
+        # date strings.  Some yfinance versions / network conditions respond
+        # better to one form than the other.
+        end_str   = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+        start_str = (datetime.now(tz=timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        attempts = [
+            dict(period=f"{days}d",                   interval=interval, auto_adjust=True),
+            dict(start=start_str, end=end_str,         interval=interval, auto_adjust=True),
+        ]
+
+        df = None
+        for kwargs in attempts:
+            df = ticker.history(**kwargs)
+            if df is not None and not df.empty:
+                break
+        # No sleep between attempts — yfinance already has its own internal
+        # timeout; adding sleep here makes Streamlit appear frozen.
 
         if df is None or df.empty:
             return []

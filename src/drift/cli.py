@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -331,22 +332,42 @@ def backfill_outcomes_cmd(
 
 @app.command("replay-gui")
 def replay_gui() -> None:
-    """Launch the Streamlit visual replay frontend in a local browser."""
+    """[Deprecated] Launch the legacy Streamlit replay viewer. Use 'drift gui' instead."""
+    console.print(
+        "[bold yellow]Warning:[/bold yellow] 'drift replay-gui' is deprecated. "
+        "Use [bold]drift gui[/bold] instead."
+    )
+    _launch_streamlit(Path(__file__).parent / "replay" / "streamlit_app.py")
+
+
+@app.command("gui")
+def gui_cmd(
+    config_path: Annotated[str, typer.Option("--config", help="Path to settings YAML.")] = (
+        "config/settings.yaml"
+    ),
+    port: Annotated[int, typer.Option("--port", help="Streamlit server port.")] = 8501,
+) -> None:
+    """Launch the Drift multi-page dashboard in a local browser."""
+    import os
+
+    gui_app = Path(__file__).parent / "gui" / "app.py"
+    env = {**os.environ, "DRIFT_CONFIG": config_path}
+    _launch_streamlit(gui_app, port=port, extra_env=env)
+
+
+def _launch_streamlit(
+    app_path: Path,
+    port: int = 8501,
+    extra_env: dict | None = None,
+) -> None:
+    """Shared helper: resolve the venv streamlit binary and run it."""
     import shutil
     import subprocess
-    from pathlib import Path
 
-    app_path = Path(__file__).parent / "replay" / "streamlit_app.py"
-
-    # Derive the project root from cli.py's location:
-    #   src/drift/cli.py → parents[0]=drift, parents[1]=src, parents[2]=project root
-    # The venv's streamlit is always at <project_root>/.venv/bin/streamlit.
-    # This is immune to sys.executable and PATH resolving to a different Python.
     project_root = Path(__file__).parents[2]
     streamlit_bin = project_root / ".venv" / "bin" / "streamlit"
 
     if not streamlit_bin.exists():
-        # Fallback: honour PATH (e.g. if the user uses a custom venv name)
         found = shutil.which("streamlit")
         if found:
             streamlit_bin = Path(found)
@@ -358,7 +379,8 @@ def replay_gui() -> None:
         )
         raise typer.Exit(1)
 
-    result = subprocess.run([str(streamlit_bin), "run", str(app_path)], check=False)
+    cmd = [str(streamlit_bin), "run", str(app_path), "--server.port", str(port)]
+    result = subprocess.run(cmd, check=False, env=extra_env)
     raise typer.Exit(result.returncode)
 
 
