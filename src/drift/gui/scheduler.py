@@ -133,10 +133,16 @@ def ensure_scheduler_running() -> BackgroundScheduler:
     import os
 
     config_path = os.environ.get("DRIFT_CONFIG", _DEFAULT_CONFIG)
-    config      = load_app_config(config_path)
 
-    # Absolutize the config path so the scheduler thread always finds it.
-    abs_config_path = str(Path(config_path).resolve())
+    # config_path may be relative (e.g. "config/settings.yaml" set by the CLI).
+    # Always resolve against the known project root so the scheduler thread
+    # finds the file regardless of what directory Streamlit is running from.
+    abs_config_path = str(
+        Path(config_path) if Path(config_path).is_absolute()
+        else _PROJECT_ROOT / config_path
+    )
+
+    config   = load_app_config(abs_config_path)
     interval = config.app.loop_interval_seconds
 
     return _get_scheduler(abs_config_path, interval)
