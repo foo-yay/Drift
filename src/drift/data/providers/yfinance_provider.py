@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import logging
+import time
 import warnings
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import yfinance as yf
 
-# Silence yfinance's "possibly delisted" and other INFO-level noise.
+# Silence yfinance's logger-based noise.
 logging.getLogger("yfinance").setLevel(logging.ERROR)
+# yfinance also calls print() directly for some warnings (e.g. "possibly delisted").
+# Those only appear in the Streamlit server terminal, not in the UI itself.
 
 # yfinance uses pd.Timestamp.utcnow() which is deprecated in pandas 4.
 # Suppress until yfinance ships a fix.  Omit category= because pandas 4
@@ -95,14 +98,23 @@ class YFinanceProvider(MarketDataProvider):
         ticker = self._get_ticker(symbol)
         interval = _TIMEFRAME_TO_INTERVAL[timeframe]
 
-        # Attempt 1: period= string (simpler; yfinance handles date math internally)
-        df = ticker.history(period=f"{days}d", interval=interval, auto_adjust=True)
+        # Build two candidate call signatures: period= first, then explicit
+        # date strings.  Some yfinance versions / network conditions respond
+        # better to one form than the other.
+        end_str   = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+        start_str = (datetime.now(tz=timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        attempts = [
+            dict(period=f"{days}d",                   interval=interval, auto_adjust=True),
+            dict(start=start_str, end=end_str,         interval=interval, auto_adjust=True),
+        ]
 
-        # Attempt 2: explicit date-string range (sometimes succeeds when period= does not)
-        if df is None or df.empty:
-            end_str   = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
-            start_str = (datetime.now(tz=timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
-            df = ticker.history(start=start_str, end=end_str, interval=interval, auto_adjust=True)
+        df = None
+        for i, kwargs in enumerate(attempts):
+            df = ticker.history(**kwargs)
+            if df is not None and not df.empty:
+                break
+            if i < len(attempts) - 1:
+                time.sleep(1)  # brief back-off before second attempt
 
         if df is None or df.empty:
             return []
