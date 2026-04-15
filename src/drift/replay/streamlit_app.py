@@ -22,7 +22,7 @@ import streamlit as st
 
 from drift.replay.chart import build_chart, events_to_df
 from drift.replay.engine import ReplayEngine, ReplaySummary
-from drift.replay.loader import fetch_bars_for_date_range, load_bars_from_csv
+from drift.replay.loader import fetch_bars_for_date_range, load_bars_from_csv, save_bars_to_csv
 from drift.storage.reader import load_events_from_log
 from drift.utils.config import load_app_config
 
@@ -37,6 +37,7 @@ st.set_page_config(
 
 _CONFIG_PATH = Path(__file__).parents[3] / "config" / "settings.yaml"
 _LOG_PATH    = Path(__file__).parents[3] / "logs" / "events.jsonl"
+_DATA_DIR    = Path(__file__).parents[3] / "data"
 
 
 # ------------------------------------------------------------------
@@ -87,6 +88,12 @@ def _run_replay(
 
     config = load_app_config(_CONFIG_PATH)
     bars_1m, bars_5m, bars_1h = fetch_bars_for_date_range(symbol, start, end)
+
+    # Auto-save fetched bars so they can be reused via CSV Replay without re-fetching.
+    tag = f"{symbol}_{start}_{end}"
+    save_bars_to_csv(bars_1m, _DATA_DIR / f"{tag}_1m.csv")
+    save_bars_to_csv(bars_5m, _DATA_DIR / f"{tag}_5m.csv")
+    save_bars_to_csv(bars_1h, _DATA_DIR / f"{tag}_1h.csv")
 
     llm_client = (
         MockLLMClient()
