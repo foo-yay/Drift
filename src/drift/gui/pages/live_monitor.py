@@ -342,10 +342,23 @@ def _run_cycle_now(config) -> None:
     from drift.app import DriftApplication
     from drift.gui.state import project_root
 
-    config_path = str(project_root() / "config" / "settings.yaml")
+    root = project_root()
+    config_path = str(root / "config" / "settings.yaml")
     # "sandbox" and "dry-run" both use MockLLMClient — consistent with CLI --dry-run flag
     _MOCK_MODES = {"sandbox", "dry-run"}
     sandbox = getattr(getattr(config, "app", None), "mode", "") in _MOCK_MODES
+
+    # Streamlit may run from src/ rather than the project root, so relative
+    # storage paths in config (e.g. "data/local.db") would resolve to the wrong
+    # location.  Absolutize them using the known project root so DriftApplication
+    # writes to the same files that get_store() reads.
+    abs_storage = config.storage.model_copy(update={
+        "jsonl_event_log":         str(root / config.storage.jsonl_event_log),
+        "sqlite_path":             str(root / config.storage.sqlite_path),
+        "sandbox_jsonl_event_log": str(root / config.storage.sandbox_jsonl_event_log),
+        "sandbox_sqlite_path":     str(root / config.storage.sandbox_sqlite_path),
+    })
+    abs_config = config.model_copy(update={"storage": abs_storage})
 
     # Redirect the module-level Rich console to a buffer for the duration of the run.
     buf = io.StringIO()
@@ -356,7 +369,7 @@ def _run_cycle_now(config) -> None:
     outcome  = "success"
     error_msg = ""
     try:
-        app = DriftApplication(config, config_path=config_path, sandbox=sandbox)
+        app = DriftApplication(abs_config, config_path=config_path, sandbox=sandbox)
         with st.spinner("Running analysis cycle…"):
             app.run_once()
     except Exception as exc:  # noqa: BLE001
