@@ -219,21 +219,32 @@ def _render_status_panel(store) -> None:
     """Shows engine status, Run Now button, gate results, and last trade plan."""
     config = _load_config()
 
-    # Compact header row: title + small inline button
+    # Header
+    st.markdown("**Engine Status**")
+
+    # Inject CSS once: style the single primary button on this page as
+    # a subtle dark-green instead of Streamlit's default coral/red.
     st.markdown(
-        "<div style='display:flex; align-items:center; gap:10px; margin-bottom:4px'>"
-        "<span style='font-weight:600; font-size:1rem'>Engine Status</span>"
-        "</div>",
+        """
+        <style>
+        div[data-testid="stButton"] button[kind="primary"] {
+            background-color: #1a5c2a !important;
+            border-color:     #2a7a3a !important;
+            color:            #d4edda !important;
+        }
+        div[data-testid="stButton"] button[kind="primary"]:hover {
+            background-color: #236b33 !important;
+            border-color:     #33884a !important;
+        }
+        div[data-testid="stButton"] button[kind="primary"]:active {
+            background-color: #1a5c2a !important;
+        }
+        </style>
+        """,
         unsafe_allow_html=True,
     )
 
-    run_col, _ = st.columns([1, 2])
-    run_clicked = run_col.button(
-        "▶ Run Now",
-        key="run_now_btn",
-        type="primary",
-        use_container_width=True,
-    )
+    run_clicked = st.button("▶ Run Now", key="run_now_btn", type="primary")
 
     try:
         from drift.gui.state import project_root
