@@ -16,6 +16,12 @@ _ICON_PASS = "✅"
 _ICON_FAIL = "🚫"
 _ICON_WARN = "⚠️"
 
+_OUTCOME_BADGE: dict[str, str] = {
+    "TRADE_PLAN_ISSUED": "🟢 TRADE PLAN ISSUED",
+    "LLM_NO_TRADE":      "🟡 NO TRADE (LLM)",
+    "BLOCKED":           "🔴 BLOCKED",
+}
+
 
 def render_gate_status(last_signal: "SignalRow | None") -> None:
     """Render a gate report panel from the most recent SQLite signal row."""
@@ -36,16 +42,23 @@ def render_gate_status(last_signal: "SignalRow | None") -> None:
     except (ValueError, TypeError):
         st.caption(last_signal.event_time_utc)
 
+    # Outcome badge — shown for every cycle type
+    outcome = last_signal.final_outcome
+    badge = _OUTCOME_BADGE.get(outcome, f"⚪ {outcome}")
+    st.markdown(f"**{badge}**")
+
+    # For LLM no-trade, show the reason/thesis
+    if outcome == "LLM_NO_TRADE" and last_signal.thesis:
+        st.caption(last_signal.thesis)
+
     gate_report = last_signal.gate_report
     if not gate_report:
-        outcome = last_signal.final_outcome
-        icon = _ICON_PASS if outcome == "TRADE_PLAN_ISSUED" else _ICON_WARN
-        st.markdown(f"{icon} {outcome}")
         return
 
     results = gate_report.get("results", [])
     for r in results:
-        name   = r.get("gate", "?")
+        # stored as "gate_name" in the GateResult model dump
+        name   = r.get("gate_name") or r.get("gate", "?")
         passed = r.get("passed", True)
         reason = r.get("reason", "")
         icon   = _ICON_PASS if passed else _ICON_FAIL
