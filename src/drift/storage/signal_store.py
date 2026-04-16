@@ -226,6 +226,25 @@ class SignalStore:
         )
         self._conn.commit()
 
+    def resolve_live_signal(
+        self, signal_id: int, outcome: str, pnl_points: float = 0.0
+    ) -> None:
+        """Write an outcome for a live pending trade plan (called by the scheduler watch loop).
+
+        Outcome labels:
+        - ``TP1_HIT``        — entry zone was touched; price reached take-profit 1
+        - ``TP2_HIT``        — entry zone was touched; price reached take-profit 2
+        - ``STOP_HIT``       — entry zone was touched; price hit the stop loss
+        - ``ENTRY_MISSED``   — TP/SL triggered but entry zone was never touched; no fill
+        - ``EXPIRED``        — time horizon elapsed; entry zone was touched (position open at expiry)
+        - ``EXPIRED_NO_FILL``— time horizon elapsed; entry zone never touched; no fill
+        """
+        self._conn.execute(
+            "UPDATE signals SET replay_outcome=?, pnl_points=? WHERE id=?",
+            (outcome, pnl_points, signal_id),
+        )
+        self._conn.commit()
+
     def delete_by_key(self, signal_key: str) -> None:
         """Delete a single signal by key (user-initiated from the GUI)."""
         self._conn.execute("DELETE FROM signals WHERE signal_key=?", (signal_key,))

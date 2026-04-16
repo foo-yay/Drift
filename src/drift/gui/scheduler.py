@@ -105,6 +105,9 @@ class BackgroundScheduler:
         # Track plan IDs we've already acted on (TP/SL hit) so the watch loop
         # doesn't fire a second cycle for the same resolved plan.
         self._resolved_plan_ids: set[int] = set()
+        # Track whether price has ever touched the entry zone for each plan (by DB id).
+        # Populated continuously by the watch loop using 1m bar OHLC overlap.
+        self._entry_zone_touched: dict[int, bool] = {}
         self._thread = threading.Thread(
             target=self._loop,
             name="drift-scheduler",
@@ -220,9 +223,42 @@ class BackgroundScheduler:
         """Callback fired by the one-shot cooldown timer."""
         with self._cooldown_timer_lock:
             self._cooldown_timer = None  # mark as consumed
+        # Before running a fresh cycle, write expiry outcomes for plans whose
+        # time horizon has elapsed without TP/SL being breached.
+        self._resolve_expired_plans()
         if not self.state.running:
             log.info("Cooldown expired — firing one-shot unscheduled cycle")
             self._run_cycle()
+
+    def _resolve_expired_plans(self) -> None:
+        """Write expiry outcomes for pending live plans whose time horizon has elapsed.
+
+        Called when the cooldown timer fires, before the next analysis cycle.
+        Plans that were already resolved via TP/SL (tracked in ``_resolved_plan_ids``)
+        are skipped; only truly unresolved plans get an expiry outcome written.
+        """
+        from drift.gui.state import _PROJECT_ROOT
+        from drift.storage.signal_store import SignalStore
+        from drift.utils.config import load_app_config
+        try:
+            config = load_app_config(self._config_path)
+            root = _PROJECT_ROOT
+            sqlite_path = str(root / config.storage.sqlite_path)
+            symbol = config.instrument.symbol
+            store = SignalStore(sqlite_path)
+            for plan in store.get_pending_live_signals(symbol):
+                if plan.id in self._resolved_plan_ids:
+                    continue
+                zone_touched = self._entry_zone_touched.get(plan.id, False)
+                outcome = "EXPIRED" if zone_touched else "EXPIRED_NO_FILL"
+                store.resolve_live_signal(plan.id, outcome, 0.0)
+                self._resolved_plan_ids.add(plan.id)
+                log.info(
+                    "Plan #%d expired without TP/SL — outcome: %s (zone_touched=%s)",
+                    plan.id, outcome, zone_touched,
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not resolve expired plans: %s", exc)
 
     def _get_cooldown_remaining_seconds(self) -> float | None:
         """Instantiate the cooldown gate and query how many seconds remain."""
@@ -305,19 +341,37 @@ class BackgroundScheduler:
                 watch_store.mark_triggered(watch.id)
                 triggered_any = True
 
-        # Check whether the active trade plan's TP or SL has been breached.
-        # Only act once per plan (tracked by plan ID) — once we've fired a
-        # resolution cycle for a plan we skip it until the DB row is resolved.
+        # Monitor the active trade plan: track entry-zone contact via 1m bars,
+        # then classify and resolve when a TP or SL level is breached.
         if pending_plans:
             plan = pending_plans[-1]  # most recent unresolved plan
+
+            # Update entry-zone tracking from 1m bar OHLC (only until confirmed).
+            if not self._entry_zone_touched.get(plan.id, False):
+                if plan.entry_min is not None and plan.entry_max is not None:
+                    try:
+                        bars_1m = provider.get_recent_bars(symbol, "1m", 5)
+                        if _entry_zone_in_bar_range(plan, bars_1m):
+                            self._entry_zone_touched[plan.id] = True
+                            log.info(
+                                "Entry zone [%.2f, %.2f] confirmed touched for plan #%d",
+                                plan.entry_min, plan.entry_max, plan.id,
+                            )
+                    except Exception as exc:  # noqa: BLE001
+                        log.debug("1m bar fetch for entry-zone check failed: %s", exc)
+
             if plan.id not in self._resolved_plan_ids and _trade_plan_level_hit(plan, last_price):
-                label = _trade_plan_hit_label(plan, last_price)
+                zone_touched = self._entry_zone_touched.get(plan.id, False)
+                outcome, pnl = _classify_resolved_outcome(plan, last_price, zone_touched)
                 log.info(
-                    "Active trade plan level hit (%s, price=%.2f) — "
-                    "cancelling cooldown and firing unscheduled cycle",
-                    label, last_price,
+                    "Active trade plan resolved: %s (price=%.2f, zone_touched=%s) → %s (pnl=%.1f pts)",
+                    _trade_plan_hit_label(plan, last_price), last_price, zone_touched, outcome, pnl,
                 )
                 self._resolved_plan_ids.add(plan.id)
+                try:
+                    signal_store.resolve_live_signal(plan.id, outcome, pnl)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Could not write plan resolution to DB: %s", exc)
                 self._cancel_cooldown_timer()
                 triggered_any = True
 
@@ -379,6 +433,73 @@ def _trade_plan_hit_label(plan: object, price: float) -> str:
         if tp2 is not None and price <= tp2: return f"TP2 ({tp2:.2f})"
         if tp1 is not None and price <= tp1: return f"TP1 ({tp1:.2f})"
     return "unknown level"
+
+
+def _entry_zone_in_bar_range(plan: object, bars: list) -> bool:
+    """Return True if any 1m bar formed *after* the plan was issued overlapped the entry zone.
+
+    Uses OHLC range overlap: a bar touched zone [entry_min, entry_max] when
+    ``bar.low <= entry_max`` AND ``bar.high >= entry_min``.  Only bars whose
+    ``timestamp`` is >= the plan's issue time are considered to avoid false
+    positives from bars that pre-date the signal.
+    """
+    from drift.models import Bar
+    entry_min = getattr(plan, "entry_min", None)
+    entry_max = getattr(plan, "entry_max", None)
+    if entry_min is None or entry_max is None:
+        return False
+    plan_time = getattr(plan, "event_time", None)  # tz-aware datetime
+    for bar in bars:
+        if not isinstance(bar, Bar):
+            continue
+        if plan_time is not None and bar.timestamp < plan_time:
+            continue
+        if bar.low <= entry_max and bar.high >= entry_min:
+            return True
+    return False
+
+
+def _classify_resolved_outcome(
+    plan: object, price: float, zone_touched: bool
+) -> tuple[str, float]:
+    """Determine the outcome label and pnl_points when a TP/SL level is breached.
+
+    pnl is measured in price points relative to the midpoint of the entry zone.
+    Returns ``(outcome_label, pnl_points)``.
+
+    Outcome labels:
+    - ``TP2_HIT``      — entry zone touched; price hit TP2 (best result)
+    - ``TP1_HIT``      — entry zone touched; price hit TP1
+    - ``STOP_HIT``     — entry zone touched; price hit the stop loss (negative pnl)
+    - ``ENTRY_MISSED`` — TP/SL triggered but entry zone was never touched; no fill
+    """
+    if not zone_touched:
+        return "ENTRY_MISSED", 0.0
+
+    bias = (getattr(plan, "bias", None) or "LONG").upper()
+    entry_min = getattr(plan, "entry_min", None) or 0.0
+    entry_max = getattr(plan, "entry_max", None) or 0.0
+    entry_mid = (entry_min + entry_max) / 2.0
+    sl  = getattr(plan, "stop_loss",     None)
+    tp1 = getattr(plan, "take_profit_1", None)
+    tp2 = getattr(plan, "take_profit_2", None)
+
+    if bias == "LONG":
+        if tp2 is not None and price >= tp2:
+            return "TP2_HIT", round(tp2 - entry_mid, 2)
+        if tp1 is not None and price >= tp1:
+            return "TP1_HIT", round(tp1 - entry_mid, 2)
+        if sl  is not None and price <= sl:
+            return "STOP_HIT", round(sl - entry_mid, 2)  # negative
+    else:  # SHORT
+        if tp2 is not None and price <= tp2:
+            return "TP2_HIT", round(entry_mid - tp2, 2)
+        if tp1 is not None and price <= tp1:
+            return "TP1_HIT", round(entry_mid - tp1, 2)
+        if sl  is not None and price >= sl:
+            return "STOP_HIT", round(entry_mid - sl, 2)  # negative
+
+    return "EXPIRED", 0.0
 
 
 def _compute_rsi(bars: list) -> float | None:
