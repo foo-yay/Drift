@@ -43,7 +43,9 @@ Examples of good watch conditions:
 
 When decision is LONG or SHORT, set watch_conditions to [].
 
-You must return valid JSON matching this exact schema. No markdown, no extra text:
+You must return valid JSON matching this exact schema. Do not include any reasoning,
+analysis, or commentary outside the JSON object. Return ONLY the JSON — no markdown
+fences, no preamble, no explanation. Your entire response must be a single JSON object:
 
 {
   "decision": "LONG" | "SHORT" | "NO_TRADE",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from drift.models import LLMDecision
 
@@ -48,29 +49,21 @@ class ResponseParser:
             return _NO_TRADE_FALLBACK, raw_dict
 
     def _extract_json(self, text: str) -> dict:
-        """Extract a JSON object from raw text, tolerating markdown fences."""
-        stripped = text.strip()
+        """Extract a JSON object from raw text, tolerating markdown fences
+        and reasoning preamble before the JSON block."""
+        # Try to find a fenced JSON block anywhere in the text (not just at the start)
+        fence_match = re.search(r"```(?:json)?\s*\n(.*?)```", text, re.DOTALL)
+        if fence_match:
+            candidate = fence_match.group(1).strip()
+            start = candidate.find("{")
+            end = candidate.rfind("}")
+            if start != -1 and end > start:
+                return json.loads(candidate[start : end + 1])
 
-        # Strip markdown code fences if present
-        if stripped.startswith("```"):
-            lines = stripped.splitlines()
-            # Drop the opening fence line and trailing fence
-            inner_lines = []
-            in_fence = False
-            for line in lines:
-                if line.startswith("```") and not in_fence:
-                    in_fence = True
-                    continue
-                if line.startswith("```") and in_fence:
-                    break
-                if in_fence:
-                    inner_lines.append(line)
-            stripped = "\n".join(inner_lines).strip()
-
-        # Find the outermost JSON object
-        start = stripped.find("{")
-        end = stripped.rfind("}")
+        # Fall back to finding the outermost JSON object in the raw text
+        start = text.find("{")
+        end = text.rfind("}")
         if start == -1 or end == -1 or end <= start:
             raise ValueError("No JSON object found in response")
 
-        return json.loads(stripped[start : end + 1])
+        return json.loads(text[start : end + 1])
