@@ -17,7 +17,12 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 
 from drift.gui.components.signal_detail import show_signal_detail
-from drift.gui.state import get_config, get_store
+from drift.gui.state import (
+    get_config,
+    get_sandbox_store,
+    get_store,
+    sandbox_sentinel_path,
+)
 from drift.replay.engine import ReplayEngine
 from drift.replay.loader import fetch_bars_for_date_range
 
@@ -40,11 +45,25 @@ def _open_store(config):
     return get_store(config)
 
 
+@st.cache_resource
+def _open_sandbox_store(config):
+    return get_sandbox_store(config)
+
+
 def page() -> None:
     st.title("🔄 Replay Lab")
 
     config = _load_config()
-    store  = _open_store(config)
+
+    in_sandbox = sandbox_sentinel_path().exists()
+    store = _open_sandbox_store(config) if in_sandbox else _open_store(config)
+
+    if in_sandbox:
+        st.info(
+            "**Sandbox mode active** — replays are written to `data/sandbox.db` "
+            "and will not affect your live signal history.",
+            icon="🧪",
+        )
 
     # ------------------------------------------------------------------
     # Inputs — always visible

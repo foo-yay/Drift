@@ -32,5 +32,16 @@ def get_store(config: AppConfig) -> SignalStore:
     return SignalStore(db_path)
 
 
+def get_sandbox_store(config: AppConfig) -> SignalStore:
+    """Return a ``SignalStore`` pointing at the sandbox database."""
+    db_path = _PROJECT_ROOT / config.storage.sandbox_sqlite_path
+    return SignalStore(db_path)
+
+
+def sandbox_sentinel_path() -> Path:
+    """Path to the ``.sandbox`` sentinel file that activates sandbox mode."""
+    return _PROJECT_ROOT / "data" / ".sandbox"
+
+
 def project_root() -> Path:
     return _PROJECT_ROOT
