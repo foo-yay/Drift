@@ -182,7 +182,7 @@ def _chart_fragment(
 ) -> None:
     """Wrapped in @st.fragment so it auto-refreshes independently."""
 
-    @st.fragment(run_every=900)
+    @st.fragment(run_every=60)
     def _inner() -> None:
         interval = _TF_INTERVAL[tf]
         lookback = _RANGE_LOOKBACK[tf][range_sel]

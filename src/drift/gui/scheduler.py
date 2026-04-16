@@ -102,6 +102,9 @@ class BackgroundScheduler:
         # One-shot timer that fires a cycle exactly when the cooldown expires.
         self._cooldown_timer: threading.Timer | None = None
         self._cooldown_timer_lock = threading.Lock()
+        # Track plan IDs we've already acted on (TP/SL hit) so the watch loop
+        # doesn't fire a second cycle for the same resolved plan.
+        self._resolved_plan_ids: set[int] = set()
         self._thread = threading.Thread(
             target=self._loop,
             name="drift-scheduler",
@@ -251,8 +254,9 @@ class BackgroundScheduler:
             time.sleep(_WATCH_POLL_INTERVAL)
 
     def _check_watches(self) -> None:
-        """Evaluate all active watch conditions; trigger a cycle if any fires."""
+        """Evaluate active watch conditions and active trade plan levels; trigger a cycle if any fires."""
         from drift.gui.state import _PROJECT_ROOT
+        from drift.storage.signal_store import SignalStore
         from drift.storage.watch_store import WatchStore
         from drift.utils.config import load_app_config
 
@@ -266,7 +270,12 @@ class BackgroundScheduler:
 
         watch_store = WatchStore(sqlite_path)
         active = watch_store.get_active(symbol)
-        if not active:
+
+        # Also monitor the active trade plan's stop / TP levels.
+        signal_store = SignalStore(sqlite_path)
+        pending_plans = signal_store.get_pending_live_signals(symbol)
+
+        if not active and not pending_plans:
             return
 
         # Fetch the latest quote once (cheap) for price-based conditions.
@@ -296,6 +305,22 @@ class BackgroundScheduler:
                 watch_store.mark_triggered(watch.id)
                 triggered_any = True
 
+        # Check whether the active trade plan's TP or SL has been breached.
+        # Only act once per plan (tracked by plan ID) — once we've fired a
+        # resolution cycle for a plan we skip it until the DB row is resolved.
+        if pending_plans:
+            plan = pending_plans[-1]  # most recent unresolved plan
+            if plan.id not in self._resolved_plan_ids and _trade_plan_level_hit(plan, last_price):
+                label = _trade_plan_hit_label(plan, last_price)
+                log.info(
+                    "Active trade plan level hit (%s, price=%.2f) — "
+                    "cancelling cooldown and firing unscheduled cycle",
+                    label, last_price,
+                )
+                self._resolved_plan_ids.add(plan.id)
+                self._cancel_cooldown_timer()
+                triggered_any = True
+
         if triggered_any and not self.state.running:
             self.state.record_watch_trigger()
             self._run_cycle(watch_trigger=True)
@@ -320,6 +345,40 @@ def _condition_met(
     if condition_type == "rsi_below" and current_rsi is not None:
         return current_rsi <= value
     return False
+
+
+def _trade_plan_level_hit(plan: object, price: float) -> bool:
+    """Return True if price has reached the active plan's stop loss, TP1, or TP2."""
+    bias = (getattr(plan, "bias", None) or "LONG").upper()
+    sl  = getattr(plan, "stop_loss",     None)
+    tp1 = getattr(plan, "take_profit_1", None)
+    tp2 = getattr(plan, "take_profit_2", None)
+    if bias == "LONG":
+        if sl  is not None and price <= sl:  return True  # noqa: E701
+        if tp1 is not None and price >= tp1: return True  # noqa: E701
+        if tp2 is not None and price >= tp2: return True  # noqa: E701
+    else:  # SHORT
+        if sl  is not None and price >= sl:  return True  # noqa: E701
+        if tp1 is not None and price <= tp1: return True  # noqa: E701
+        if tp2 is not None and price <= tp2: return True  # noqa: E701
+    return False
+
+
+def _trade_plan_hit_label(plan: object, price: float) -> str:
+    """Human-readable label for which level was crossed (used in log messages)."""
+    bias = (getattr(plan, "bias", None) or "LONG").upper()
+    sl  = getattr(plan, "stop_loss",     None)
+    tp1 = getattr(plan, "take_profit_1", None)
+    tp2 = getattr(plan, "take_profit_2", None)
+    if bias == "LONG":
+        if sl  is not None and price <= sl:  return f"stop loss ({sl:.2f})"
+        if tp2 is not None and price >= tp2: return f"TP2 ({tp2:.2f})"
+        if tp1 is not None and price >= tp1: return f"TP1 ({tp1:.2f})"
+    else:
+        if sl  is not None and price >= sl:  return f"stop loss ({sl:.2f})"
+        if tp2 is not None and price <= tp2: return f"TP2 ({tp2:.2f})"
+        if tp1 is not None and price <= tp1: return f"TP1 ({tp1:.2f})"
+    return "unknown level"
 
 
 def _compute_rsi(bars: list) -> float | None:
