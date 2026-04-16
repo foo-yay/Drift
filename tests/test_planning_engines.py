@@ -127,6 +127,34 @@ class TestStopEngine:
         if stop is not None:
             assert stop == round(stop, 2)
 
+    def test_structural_stop_used_when_within_max(self):
+        # inv_price 5 pts below entry_min → structural stop is ~7 pts (inv - 2 buffer)
+        # max_stop_points=30 → structural is within limits and wider than ATR floor
+        eng = StopEngine(_risk_config(atr_stop_floor_mult=0.01, max_stop_points=30.0), structure_buffer=2.0)
+        decision = _long_decision(invalidation_price=19483.0)  # 7 pts below entry_min 19490
+        stop = eng.calculate(_snapshot(), decision, atr=1.0)
+        # structural = 19483 - 2 = 19481; dist from entry_min = 9 pts; within max → used
+        assert stop is not None
+        assert stop == pytest.approx(19481.0, abs=0.01)
+
+    def test_structural_stop_falls_back_to_atr_when_too_wide(self):
+        # inv_price 50 pts below entry_min → structural would exceed max_stop_points
+        eng = StopEngine(_risk_config(max_stop_points=20.0, atr_stop_floor_mult=0.8), structure_buffer=2.0)
+        decision = _long_decision(invalidation_price=19440.0)  # 50 pts below entry_min
+        stop = eng.calculate(_snapshot(), decision, atr=10.0)
+        # structural = 19440 - 2 = 19438 → 52 pts > max 20 → falls back to ATR floor - buffer
+        # atr_floor = 19490 - 8 = 19482; stop = 19482 - 2 = 19480
+        assert stop is not None
+        assert stop == pytest.approx(19480.0, abs=0.01)
+
+    def test_structural_short_stop_used_when_within_max(self):
+        eng = StopEngine(_risk_config(atr_stop_floor_mult=0.01, max_stop_points=30.0), structure_buffer=2.0)
+        decision = _short_decision(invalidation_price=19523.0)  # 7 pts above entry_max 19516
+        stop = eng.calculate(_snapshot(), decision, atr=1.0)
+        # structural = 19523 + 2 = 19525; dist from entry_max = 9 pts → used
+        assert stop is not None
+        assert stop == pytest.approx(19525.0, abs=0.01)
+
 
 class TestTargetEngine:
     def test_tp1_above_entry_for_long(self):

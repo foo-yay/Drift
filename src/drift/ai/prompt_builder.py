@@ -61,6 +61,7 @@ fences, no preamble, no explanation. Your entire response must be a single JSON 
   "entry_style": "buy_pullback" | "buy_breakout" | "buy_reclaim" | "sell_pullback" | "sell_breakout" | "sell_reclaim" | "buy_support" | "sell_resistance" | "no_entry",
   "entry_zone": [<low_price>, <high_price>],
   "invalidation_hint": "<string>",
+  "invalidation_price": <exact price level that proves the thesis wrong, or null>,
   "hold_minutes": <integer 1-120>,
   "do_not_trade_if": ["<condition>", ...],
   "watch_conditions": [
@@ -74,8 +75,16 @@ fences, no preamble, no explanation. Your entire response must be a single JSON 
 }
 
 If decision is NO_TRADE, set setup_type to "no_trade", entry_zone to [0.0, 0.0], hold_minutes to 1,
-and populate watch_conditions with 1-3 specific triggers.
-If decision is LONG or SHORT, set watch_conditions to [].
+invalidation_price to null, and populate watch_conditions with 1-3 specific triggers.
+If decision is LONG or SHORT, set watch_conditions to [] and set invalidation_price to the exact
+price level that definitively invalidates the setup — for example:
+- pullback_continuation LONG: the swing low the pullback is forming from (price below this = thesis dead)
+- vwap_reclaim LONG: VWAP itself (a close back below VWAP kills the reclaim)
+- breakout_continuation LONG: the breakout level that was just cleared
+- range_fade SHORT at resistance: just above the range high
+- mean_reversion: the extreme price that initiated the extension
+This price is used to compute a structurally-meaningful stop loss. Be precise — use the exact level
+from the order blocks, VWAP, or structure visible in the snapshot.
 """
 
 
