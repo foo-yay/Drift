@@ -74,6 +74,25 @@ class MarketSnapshot(BaseModel):
     market_note: str | None = None
 
 
+class WatchCondition(BaseModel):
+    """A price/indicator level the LLM wants to monitor after a NO_TRADE decision.
+
+    When the condition is met by the fast-poll watcher, a full LLM cycle is
+    triggered automatically so the opportunity is not missed.
+
+    condition_type options:
+      price_above  — trigger when last_price >= value
+      price_below  — trigger when last_price <= value
+      rsi_above    — trigger when 14-period RSI on 1m bars >= value
+      rsi_below    — trigger when 14-period RSI on 1m bars <= value
+    """
+
+    condition_type: Literal["price_above", "price_below", "rsi_above", "rsi_below"]
+    value: float
+    description: str  # human-readable: "pullback to support at 21,000"
+    expires_minutes: int = Field(default=60, ge=5, le=480)
+
+
 class LLMDecision(BaseModel):
     decision: Literal["LONG", "SHORT", "NO_TRADE"]
     confidence: int = Field(ge=0, le=100)
@@ -84,6 +103,7 @@ class LLMDecision(BaseModel):
     invalidation_hint: str
     hold_minutes: int = Field(ge=1, le=120)
     do_not_trade_if: list[str]
+    watch_conditions: list[WatchCondition] = Field(default_factory=list)
 
 
 class GateResult(BaseModel):

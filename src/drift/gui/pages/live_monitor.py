@@ -122,6 +122,7 @@ def page() -> None:
 
     with status_col:
         _render_status_panel(store)
+        _render_watches_panel(config)
 
     with chart_col:
         _chart_fragment(symbol, tf, range_sel, store,
@@ -506,6 +507,56 @@ def _run_cycle_now(config) -> None:
     st.session_state["_show_run_output"] = True
     st.cache_resource.clear()  # force store to re-open on rerun
     st.rerun()  # re-render page so panel picks up new signal + dialog opens
+
+
+# ---------------------------------------------------------------------------
+# Active watches panel
+# ---------------------------------------------------------------------------
+
+def _render_watches_panel(config) -> None:
+    """Show active watch conditions set by the LLM after the last NO_TRADE cycle.
+
+    Auto-refreshes every 30 seconds (matching the watch-poll interval).
+    """
+    if not getattr(config.storage, "use_sqlite", False):
+        return
+
+    @st.fragment(run_every=30)
+    def _inner() -> None:
+        from drift.gui.state import _PROJECT_ROOT
+        from drift.storage.watch_store import WatchStore
+
+        try:
+            sqlite_path = str(_PROJECT_ROOT / config.storage.sqlite_path)
+            watch_store = WatchStore(sqlite_path)
+            active = watch_store.get_active(config.instrument.symbol)
+        except Exception:  # noqa: BLE001
+            return
+
+        st.divider()
+        st.markdown("**Active Watches**")
+
+        if not active:
+            st.caption("No active watches. The LLM will set targets after the next NO_TRADE cycle.")
+            return
+
+        _ICON = {
+            "price_above": "⬆",
+            "price_below": "⬇",
+            "rsi_above":   "📈",
+            "rsi_below":   "📉",
+        }
+        for w in active:
+            expires = datetime.fromisoformat(w.expires_at).replace(tzinfo=timezone.utc)
+            mins_left = max(0, int((expires - datetime.now(tz=timezone.utc)).total_seconds() / 60))
+            icon = _ICON.get(w.condition_type, "◉")
+            label = w.condition_type.replace("_", " ").title()
+            st.markdown(
+                f"{icon} **{label}** `{w.value:,.2f}` · _{mins_left}m left_"
+            )
+            st.caption(w.description)
+
+    _inner()
 
 
 # ---------------------------------------------------------------------------

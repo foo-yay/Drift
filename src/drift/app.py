@@ -30,6 +30,9 @@ from drift.output.console import (
 from drift.output.notifications import notify_signal
 from drift.planning.trade_plan_builder import TradePlanBuilder
 from drift.storage.logger import EventLogger
+from drift.storage.outcome_resolver import resolve_live_outcomes
+from drift.storage.signal_store import SignalStore
+from drift.storage.watch_store import WatchStore
 
 
 class DriftApplication:
@@ -46,6 +49,12 @@ class DriftApplication:
             config.storage.sqlite_path if config.storage.use_sqlite else None
         )
         self.event_logger = EventLogger(jsonl_path, sqlite_path)
+        self._signal_store: SignalStore | None = (
+            SignalStore(sqlite_path) if sqlite_path else None
+        )
+        self._watch_store: WatchStore | None = (
+            WatchStore(sqlite_path) if sqlite_path else None
+        )
         self._provider = YFinanceProvider()
         self._engine = FeatureEngine(config)
 
@@ -83,6 +92,18 @@ class DriftApplication:
         render_startup(self.config, self.config_path, sandbox=self._sandbox)
 
         symbol = self.config.instrument.symbol
+
+        # ------------------------------------------------------------------
+        # Auto-resolve pending live outcomes (non-blocking — failures are logged)
+        # ------------------------------------------------------------------
+        if self._signal_store and not self._sandbox:
+            try:
+                resolved = resolve_live_outcomes(self._signal_store, symbol, self._provider)
+                if resolved:
+                    render_status(f"auto-resolved {resolved} pending live signal(s)")
+            except Exception as exc:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).warning("Outcome resolver error: %s", exc)
 
         # ------------------------------------------------------------------
         # Fetch market data
@@ -164,7 +185,17 @@ class DriftApplication:
                 final_outcome="LLM_NO_TRADE",
                 final_reason=decision.thesis,
             )
+            sig_key = event.ensure_signal_key().signal_key
             self.event_logger.append_event(event)
+            # Save watch conditions so the fast-poll watcher can monitor them.
+            if self._watch_store and not self._sandbox and decision.watch_conditions:
+                self._watch_store.replace_watches(
+                    symbol, decision.watch_conditions, source_signal_key=sig_key
+                )
+                render_status(
+                    f"{len(decision.watch_conditions)} watch condition(s) set — "
+                    "monitoring in real-time"
+                )
             render_no_trade(decision, "LLM returned NO_TRADE.")
             render_success(f"no-trade cycle logged to {self.config.storage.jsonl_event_log}")
             return "LLM_NO_TRADE"
