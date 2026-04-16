@@ -2263,3 +2263,95 @@ For Signal Detail dialogs showing old signals:
 - Retire `drift kill`, `drift resume`, `drift replay-gui` CLI commands (print deprecation message)
 - Phase 11 placeholder: overlay toggles (EMAs, VWAP, Order Blocks) stubbed but inactive
 
+---
+
+# 28. Future Gate Upgrades
+
+These three capabilities were evaluated during the April 2026 build cycle and deferred. The notes below provide enough context to implement them when the time is right.
+
+---
+
+## 28.1 Full DOM (Depth of Market) Gate
+
+**Current status:** Implemented as a volume imbalance proxy in `TradePlanBuilder`.
+
+The proxy logic (`volume_imbalance` field on `MarketSnapshot`) classifies each 1-minute bar as buyer-driven (close > open) or seller-driven (close < open) and produces a signed score in [-100, +100]. When the score exceeds `gates.volume_imbalance_threshold` (default 30) in the opposing direction of the LLM's decision, the trade is rejected.
+
+**When to upgrade to real DOM:**
+
+Upgrade when the system has an authenticated WebSocket connection to a live venue (TopstepX, Tradovate, or Interactive Brokers). Real DOM gives true bid/ask depth and is significantly more reliable than bar-based inference.
+
+**How to implement:**
+
+1. Add a `DOMProvider` abstract interface to `data/providers/` with a single method:
+   ```python
+   def get_dom_imbalance(symbol: str) -> float | None:
+       """Return signed buy/sell DOM imbalance, typically -100 to +100.
+       Returns None if data unavailable."""
+   ```
+2. Implement a concrete `TopstepxDOMProvider` (or `TradovateDOMProvider`) that subscribes to the L2 feed and maintains a rolling snapshot.
+3. Inject the DOM provider into `DriftApplication.__init__()`, call `get_dom_imbalance()` inside `run_once()` before features are assembled, and pass the result into `MarketSnapshot.volume_imbalance` (reusing the existing field — no model changes needed).
+4. Remove or retain the bar-based proxy as a fallback when live DOM is unavailable.
+
+The gate logic in `TradePlanBuilder` requires zero changes — it reads `snapshot.volume_imbalance` regardless of the source.
+
+**Free options:**
+- Interactive Brokers TWS API (free with funded IB account, requires local TWS to be running)
+- Tradovate WebSocket API (free with Tradovate/TopstepX funding)
+- No reliable free public REST feed exists for futures L2
+
+---
+
+## 28.2 GEX (Gamma Exposure) Gate
+
+**Current status:** Deferred — no free real-time source available.
+
+**What it would do:** GEX measures the net gamma position of options market-makers on a given underlying (NQ). High positive GEX ($2B+) acts as a "gravity well" — dealers hedge against moves by selling into rallies and buying dips, which pins price. High negative GEX amplifies moves.
+
+**Gate logic (when implemented):**
+- GEX > +$2B → block all trades (pinned market; directional setups unlikely to follow through)
+- GEX negative → multiply TP by 1.3 (larger expected move)
+- GEX positive (but < $2B) → multiply TP by 0.7 (dampened expected move)
+
+**How to implement:**
+
+1. Add a `GEXProvider` abstract interface in `data/providers/`:
+   ```python
+   def get_gex(symbol: str) -> float | None:
+       """Return net GEX in USD billions. Positive = net long gamma.
+       Returns None if unavailable."""
+   ```
+2. Add `gex_usd_billions: float | None = None` to `MarketSnapshot`.
+3. Apply the gate check in `TradePlanBuilder.build()` after the volume imbalance check — block if GEX > 2.0, otherwise pass the TP multiplier through to `TargetEngine.calculate()`.
+4. Add config fields to `GatesSection`: `gex_gate_enabled`, `gex_pin_threshold_bn` (default 2.0), `gex_negative_tp_mult` (1.3), `gex_positive_tp_mult` (0.7).
+
+**Data sources (all paid):**
+- SpotGamma HIRO API — real-time GEX by strike
+- Squeeze Metrics DEX/GEX — institutional-grade, ~$50/mo
+- Volland — options flow with GEX, ~$79/mo
+
+**Not recommended:** Reverse-engineering GEX from public options chains (NBBO data from yfinance) is theoretically possible but requires significant gamma math and is unreliable for intraday timing.
+
+---
+
+## 28.3 Blind Recon (Position / Exchange State Sync)
+
+**Current status:** Deferred — requires a live execution layer to have anything to compare against.
+
+**What it would do:** Every 5 seconds, a background thread compares the engine's internally-tracked position state against the exchange's actual open positions. Detects:
+
+- **Engine thinks it's flat, exchange has a position** → unknown fill; alert Discord; block all new orders
+- **Engine thinks it's in a trade, exchange is flat** → SL or TP silently filled; sync P&L; clear position state; start cooldown
+- **Size mismatch** → partial fill; sync size to exchange reality
+
+**How to implement:**
+
+1. Add `PositionState` dataclass to `models.py` — tracks `{symbol, direction, size, entry_price, entry_time, sl, tp1, tp2}`. Persist to SQLite via a new `PositionStore` (single-row upsert per symbol).
+2. Add an `ExchangeProvider` abstract interface with `get_open_positions(symbol) -> PositionState | None`.
+3. Implement `TopstepxPositionPoller` (WebSocket account feed) or `TradovatePositionPoller`.
+4. Add a `_recon_loop()` method to `BackgroundScheduler` (runs in a separate daemon thread, `time.sleep(5)` cadence).
+5. On divergence: call `_handle_divergence()` which logs to JSONL, optionally posts a Discord webhook, and sets a `recon_error` sentinel that the main gate runner checks (similar to kill switch).
+
+**Dependency:** This feature requires the same authenticated exchange connection as execution. Implement alongside the TopstepX/Tradovate API integration (Phase E of the broader roadmap).
+
+

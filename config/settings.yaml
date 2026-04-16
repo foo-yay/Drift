@@ -61,6 +61,8 @@ gates:
   kill_switch_path: data/.kill_switch
   news_gate_enabled: true
   news_blackout_minutes: 30
+  volume_imbalance_gate_enabled: true
+  volume_imbalance_threshold: 30.0  # block when opposing pressure exceeds this (0–100 scale)
 
 strategy:
   allowed_setup_types:

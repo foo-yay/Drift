@@ -56,6 +56,29 @@ class TradePlanBuilder:
             logger.info("Decision rejected — setup_type %r not in allowed list", decision.setup_type)
             return None
 
+        # Volume imbalance proxy (DOM substitute) — directional check.
+        # An up-bar-weighted imbalance score > 0 means buyers dominate; < 0 means
+        # sellers dominate.  Block the trade when opposing pressure is strong enough
+        # to call the directional edge into question.
+        if self._cfg.gates.volume_imbalance_gate_enabled:
+            imbalance = snapshot.volume_imbalance
+            threshold = self._cfg.gates.volume_imbalance_threshold
+            if imbalance is not None:
+                if decision.decision == "LONG" and imbalance < -threshold:
+                    logger.info(
+                        "LONG rejected — volume imbalance %.1f below -%s (seller pressure)",
+                        imbalance,
+                        threshold,
+                    )
+                    return None
+                if decision.decision == "SHORT" and imbalance > threshold:
+                    logger.info(
+                        "SHORT rejected — volume imbalance %.1f above +%s (buyer pressure)",
+                        imbalance,
+                        threshold,
+                    )
+                    return None
+
         # ATR for stop calculation (fall back to 10 pts if missing from snapshot)
         atr = self._resolve_atr(snapshot)
 

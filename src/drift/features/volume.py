@@ -13,7 +13,7 @@ _RTH_OPEN_MINUTE = 30
 
 
 class VolumeFeatures(FeatureComputer):
-    """Computes session VWAP and volume spike metrics.
+    """Computes session VWAP, volume spike metrics, and volume imbalance.
 
     VWAP is computed from RTH session open (9:30 AM ET) each day.
     Bars from prior sessions are excluded from the VWAP calculation.
@@ -25,10 +25,18 @@ class VolumeFeatures(FeatureComputer):
         vwap_bars_used        - number of 1m bars included in VWAP today
         volume_spike_ratio    - latest bar volume / rolling mean volume
         volume_state          - "spike" | "elevated" | "normal" | "low"
+        volume_imbalance      - buy/sell volume imbalance proxy over the last
+                                ``imbalance_window`` bars, in range [-100, +100].
+                                Positive = net buyer pressure; negative = net seller
+                                pressure. Computed by treating up-bars (close > open)
+                                as buy volume and down-bars (close < open) as sell
+                                volume. Doji bars (close == open) contribute equally
+                                to both sides. None when not enough bars are available.
     """
 
-    def __init__(self, volume_spike_window: int) -> None:
+    def __init__(self, volume_spike_window: int, imbalance_window: int = 10) -> None:
         self._spike_window = volume_spike_window
+        self._imbalance_window = imbalance_window
 
     def compute(self, bars: list[Bar], **kwargs: object) -> dict[str, object]:
         df = bars_to_df(bars)
@@ -93,11 +101,43 @@ class VolumeFeatures(FeatureComputer):
             "vwap_bars_used": vwap_bars_used,
             "volume_spike_ratio": spike_ratio,
             "volume_state": volume_state,
+            "volume_imbalance": self._compute_imbalance(df),
         }
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _compute_imbalance(self, df: pd.DataFrame) -> float | None:
+        """Compute signed buy/sell volume imbalance proxy over the last N bars.
+
+        Each bar contributes its full volume to the buy side if close > open,
+        to the sell side if close < open, or half-and-half if close == open
+        (doji). The result is normalised to [-100, +100].
+
+        Returns None when fewer bars than the window are available.
+        """
+        window = self._imbalance_window
+        if len(df) < window:
+            return None
+
+        recent = df.iloc[-window:]
+        buy_vol = 0.0
+        sell_vol = 0.0
+        for _, row in recent.iterrows():
+            vol = float(row["volume"])
+            if row["close"] > row["open"]:
+                buy_vol += vol
+            elif row["close"] < row["open"]:
+                sell_vol += vol
+            else:
+                buy_vol += vol / 2
+                sell_vol += vol / 2
+
+        total = buy_vol + sell_vol
+        if total == 0:
+            return 0.0
+        return round((buy_vol - sell_vol) / total * 100, 1)
 
     def _classify_volume(self, ratio: float) -> str:
         if ratio >= 2.5:
@@ -116,4 +156,5 @@ class VolumeFeatures(FeatureComputer):
             "vwap_bars_used": 0,
             "volume_spike_ratio": None,
             "volume_state": "unknown",
+            "volume_imbalance": None,
         }
