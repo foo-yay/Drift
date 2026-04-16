@@ -125,6 +125,7 @@ def page() -> None:
         _render_watches_panel(config)
 
     with chart_col:
+        _live_price_widget(symbol)
         _chart_fragment(symbol, tf, range_sel, store,
                         show_emas=show_emas, show_vwap=show_vwap, show_obs=show_obs)
 
@@ -133,6 +134,37 @@ def page() -> None:
     # ------------------------------------------------------------------
     st.divider()
     render_news_panel(filter_countries=filter_ctry)
+
+
+# ---------------------------------------------------------------------------
+# Live price widget — fast-refreshing real-time quote
+# ---------------------------------------------------------------------------
+
+def _live_price_widget(symbol: str) -> None:
+    """Display near-real-time price above the chart; refreshes every 30 s.
+
+    Uses ``fast_info.last_price`` which Yahoo updates every few seconds —
+    much more current than the 15-min delayed bar history.
+    """
+    @st.fragment(run_every=5)
+    def _inner() -> None:
+        from drift.data.providers.yfinance_provider import YFinanceProvider
+        try:
+            price = YFinanceProvider().get_latest_quote(symbol)
+            now_et = datetime.now(tz=_ET)
+            st.markdown(
+                f"<div style='margin:0 0 4px 0; line-height:1.2'>"
+                f"<span style='font-size:1.5rem;font-weight:700;color:#f5f5f5;"
+                f"letter-spacing:0.01em'>{price:,.2f}</span>"
+                f"<span style='color:#777;font-size:0.80rem;margin-left:10px'>"
+                f"Live \u00b7 {now_et.strftime('%H:%M:%S')} ET</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    _inner()
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +182,7 @@ def _chart_fragment(
 ) -> None:
     """Wrapped in @st.fragment so it auto-refreshes independently."""
 
-    @st.fragment(run_every=900)
+    @st.fragment(run_every=60)
     def _inner() -> None:
         interval = _TF_INTERVAL[tf]
         lookback = _RANGE_LOOKBACK[tf][range_sel]
@@ -187,12 +219,57 @@ def _chart_fragment(
         if show_emas or show_vwap or show_obs:
             overlay_data = _compute_overlay_data(bars, signals, show_emas, show_vwap, show_obs)
 
+        # Live price (fast_info — near-real-time) and active watch levels
+        # (SQLite read — instantaneous).  Both are cheap enough to fetch on
+        # every chart render without any rate-limit concern.
+        live_price: float | None = None
+        try:
+            from drift.data.providers.yfinance_provider import YFinanceProvider
+            live_price = YFinanceProvider().get_latest_quote(symbol)
+        except Exception:  # noqa: BLE001
+            pass
+
+        watch_levels: list[dict] = []
+        try:
+            cfg = _load_config()
+            if getattr(cfg.storage, "use_sqlite", False):
+                from drift.gui.state import _PROJECT_ROOT
+                from drift.storage.watch_store import WatchStore
+                ws = WatchStore(str(_PROJECT_ROOT / cfg.storage.sqlite_path))
+                watch_levels = [
+                    {"condition_type": w.condition_type, "value": w.value}
+                    for w in ws.get_active(symbol)
+                ]
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Active (unresolved) trade plan — show entry/stop/TP lines on chart.
+        # Only the most recent pending live signal is shown; clears when resolved.
+        active_trade_plan: dict | None = None
+        try:
+            pending = store.get_pending_live_signals(symbol)
+            if pending:
+                sig = pending[-1]  # most recent
+                active_trade_plan = {
+                    "bias":          sig.bias,
+                    "entry_min":     sig.entry_min,
+                    "entry_max":     sig.entry_max,
+                    "stop_loss":     sig.stop_loss,
+                    "take_profit_1": sig.take_profit_1,
+                    "take_profit_2": sig.take_profit_2,
+                }
+        except Exception:  # noqa: BLE001
+            pass
+
         fig = build_candlestick_chart(
             bars, signals, timeframe=tf, height=500,
             show_emas=show_emas,
             show_vwap=show_vwap,
             show_order_blocks=show_obs,
             overlay_data=overlay_data,
+            live_price=live_price,
+            watch_levels=watch_levels or None,
+            active_trade_plan=active_trade_plan,
         )
 
         # Offer click-to-detail via plotly selected point → session state

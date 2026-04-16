@@ -83,6 +83,9 @@ def build_candlestick_chart(
     show_vwap: bool = False,
     show_order_blocks: bool = False,
     overlay_data: "dict[str, Any] | None" = None,
+    live_price: float | None = None,
+    watch_levels: "list[dict] | None" = None,
+    active_trade_plan: "dict | None" = None,
 ) -> go.Figure:
     """Build a Plotly candlestick chart with optional overlays.
 
@@ -98,6 +101,19 @@ def build_candlestick_chart(
                            from ``overlay_data``.
         overlay_data: Dict of pre-computed overlay values (see module docstring).
                       Safe to omit or pass ``None`` — missing keys are ignored.
+        live_price: When provided, draws a dotted horizontal line at this price
+                    level labelled "Live".  Use ``fast_info.last_price`` from
+                    yfinance — it is near-real-time (~seconds stale).
+        watch_levels: Active watch conditions to overlay as horizontal lines.
+                      Each dict must have ``condition_type`` and ``value`` keys.
+                      Only ``price_above`` / ``price_below`` types are drawn
+                      (RSI watches have no meaningful price-axis representation).
+        active_trade_plan: When provided, draws horizontal lines for the pending
+                      trade plan's entry zone, stop loss, TP1, and TP2.  Pass
+                      the most recent unresolved SignalRow's trade plan fields as
+                      a dict with keys: bias, entry_min, entry_max, stop_loss,
+                      take_profit_1, take_profit_2.  Cleared automatically when
+                      the signal is resolved (caller passes None).
 
     Returns:
         A configured Plotly ``Figure`` ready for ``st.plotly_chart()``.
@@ -277,6 +293,91 @@ def build_candlestick_chart(
                 showarrow=False,
                 xanchor="right",
                 font=dict(size=9, color=line_c),
+            )
+
+    # -- Active trade plan levels ---------------------------------------
+    if active_trade_plan and bars:
+        tp_bias  = (active_trade_plan.get("bias") or "LONG").upper()
+        _is_long = tp_bias == "LONG"
+        _entry_color = "rgba(80, 200, 120, 0.80)"   # green
+        _stop_color  = "rgba(230,  80,  80, 0.80)"  # red
+        _tp1_color   = "rgba(100, 180, 255, 0.85)"  # blue
+        _tp2_color   = "rgba(100, 180, 255, 0.50)"  # faded blue
+
+        entry_min = active_trade_plan.get("entry_min")
+        entry_max = active_trade_plan.get("entry_max")
+        stop_loss = active_trade_plan.get("stop_loss")
+        tp1       = active_trade_plan.get("take_profit_1")
+        tp2       = active_trade_plan.get("take_profit_2")
+
+        if entry_min and entry_max:
+            # Shade the entry zone as a rectangle spanning the full x range
+            fig.add_hrect(
+                y0=entry_min, y1=entry_max,
+                fillcolor="rgba(80, 200, 120, 0.07)",
+                line_width=0,
+                annotation_text=f"Entry Zone  {entry_min:,.2f}–{entry_max:,.2f}",
+                annotation_position="top right",
+                annotation_font=dict(size=10, color=_entry_color),
+            )
+            # Top and bottom edges of the zone
+            for lvl in (entry_min, entry_max):
+                fig.add_hline(y=lvl, line=dict(color=_entry_color, width=1, dash="dot"))
+        if stop_loss:
+            fig.add_hline(
+                y=stop_loss,
+                line=dict(color=_stop_color, width=1.5, dash="dash"),
+                annotation_text=f"Stop  {stop_loss:,.2f}",
+                annotation_position="bottom right" if _is_long else "top right",
+                annotation_font=dict(size=10, color=_stop_color),
+            )
+        if tp1:
+            fig.add_hline(
+                y=tp1,
+                line=dict(color=_tp1_color, width=1.5, dash="dash"),
+                annotation_text=f"TP1  {tp1:,.2f}",
+                annotation_position="top right" if _is_long else "bottom right",
+                annotation_font=dict(size=10, color=_tp1_color),
+            )
+        if tp2:
+            fig.add_hline(
+                y=tp2,
+                line=dict(color=_tp2_color, width=1, dash="dot"),
+                annotation_text=f"TP2  {tp2:,.2f}",
+                annotation_position="top right" if _is_long else "bottom right",
+                annotation_font=dict(size=10, color=_tp2_color),
+            )
+
+    # -- Live price line ------------------------------------------------
+    if live_price is not None and bars:
+        fig.add_hline(
+            y=live_price,
+            line=dict(color="rgba(255, 255, 255, 0.50)", width=1, dash="dot"),
+            annotation_text=f"Live  {live_price:,.2f}",
+            annotation_position="bottom right",
+            annotation_font=dict(size=10, color="rgba(255,255,255,0.65)"),
+        )
+
+    # -- Watch condition lines ------------------------------------------
+    _WATCH_STYLE: dict[str, tuple[str, str, str]] = {
+        "price_above": ("rgba(80, 200, 120, 0.85)", "▲", "top right"),
+        "price_below": ("rgba(230,  80,  80, 0.85)", "▼", "bottom right"),
+    }
+    if watch_levels and bars:
+        for w in watch_levels:
+            ctype = w.get("condition_type", "")
+            if ctype not in _WATCH_STYLE:
+                continue
+            value = w.get("value")
+            if value is None:
+                continue
+            colour, arrow, pos = _WATCH_STYLE[ctype]
+            fig.add_hline(
+                y=value,
+                line=dict(color=colour, width=1.5, dash="dash"),
+                annotation_text=f"{arrow} Watch  {value:,.2f}",
+                annotation_position=pos,
+                annotation_font=dict(size=10, color=colour),
             )
 
     # -- Layout ---------------------------------------------------------

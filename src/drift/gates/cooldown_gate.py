@@ -8,9 +8,10 @@ from drift.config.models import GatesSection, RiskSection
 from drift.gates.base import Gate
 from drift.models import GateResult, MarketSnapshot
 
-# Outcomes that represent an actual signal attempt (not a gate block).
-# These are the events that count toward the cooldown timer.
-_SIGNAL_OUTCOMES = {"SNAPSHOT_ONLY", "LLM_NO_TRADE", "TRADE_PLAN_ISSUED"}
+# Only a live trade plan starts the cooldown timer.
+# NO_TRADE and BLOCKED cycles do not — the loop should be free to re-evaluate
+# on its normal schedule after those outcomes.
+_SIGNAL_OUTCOMES = {"TRADE_PLAN_ISSUED"}
 
 
 class CooldownGate(Gate):
@@ -53,7 +54,7 @@ class CooldownGate(Gate):
                 reason="Cooldown period is 0 minutes.",
             )
 
-        last_signal_time = self._last_signal_time()
+        last_signal_time, cooldown_minutes = self._get_last_signal()
 
         if last_signal_time is None:
             return GateResult(
@@ -65,14 +66,14 @@ class CooldownGate(Gate):
         now = datetime.now(tz=timezone.utc)
         elapsed_minutes = (now - last_signal_time).total_seconds() / 60
 
-        if elapsed_minutes < self._cooldown_minutes:
-            remaining = round(self._cooldown_minutes - elapsed_minutes, 1)
+        if elapsed_minutes < cooldown_minutes:
+            remaining = round(cooldown_minutes - elapsed_minutes, 1)
             return GateResult(
                 gate_name=self.name,
                 passed=False,
                 reason=(
                     f"Cooldown active — {remaining} min remaining "
-                    f"(cooldown window: {self._cooldown_minutes} min)."
+                    f"(cooldown window: {cooldown_minutes} min)."
                 ),
             )
 
@@ -82,20 +83,45 @@ class CooldownGate(Gate):
             reason=f"Cooldown clear — last signal cycle was {round(elapsed_minutes, 1)} min ago.",
         )
 
+    def seconds_remaining(self) -> float | None:
+        """Seconds until cooldown clears, or ``None`` if cooldown is not active.
+
+        Used by the scheduler to schedule a one-shot wakeup cycle the moment
+        the cooldown window expires, rather than waiting up to a full loop
+        interval.
+        """
+        if not self._gates.cooldown_enabled or self._cooldown_minutes == 0:
+            return None
+
+        last_time, hold_minutes = self._get_last_signal()
+        if last_time is None:
+            return None
+
+        elapsed = (datetime.now(tz=timezone.utc) - last_time).total_seconds()
+        remaining = hold_minutes * 60 - elapsed
+        return remaining if remaining > 0 else None
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
-    def _last_signal_time(self) -> datetime | None:
-        """Scan the JSONL log for the most recent signal-cycle timestamp."""
-        if not self._log_path.exists():
-            return None
+    def _get_last_signal(self) -> tuple[datetime | None, int]:
+        """Scan the JSONL log for the most recent signal-cycle timestamp.
 
-        last: datetime | None = None
+        Returns ``(timestamp, hold_minutes)``.  ``hold_minutes`` is drawn from
+        ``trade_plan.max_hold_minutes`` in the matching event so that the
+        cooldown window matches the actual trade time horizon.  Falls back to
+        ``risk.cooldown_minutes`` when the field is absent.
+        """
+        if not self._log_path.exists():
+            return None, self._cooldown_minutes
+
+        last_time: datetime | None = None
+        last_hold: int = self._cooldown_minutes
         try:
             lines = self._log_path.read_text(encoding="utf-8").splitlines()
         except OSError:
-            return None
+            return None, self._cooldown_minutes
 
         for line in lines:
             line = line.strip()
@@ -114,9 +140,11 @@ class CooldownGate(Gate):
                 # Ensure timezone-aware for comparison.
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
-                if last is None or ts > last:
-                    last = ts
+                if last_time is None or ts > last_time:
+                    last_time = ts
+                    raw = (event.get("trade_plan") or {}).get("max_hold_minutes")
+                    last_hold = int(raw) if raw and int(raw) > 0 else self._cooldown_minutes
             except (KeyError, ValueError):
                 continue
 
-        return last
+        return last_time, last_hold
