@@ -32,7 +32,8 @@ import streamlit as st
 log = logging.getLogger(__name__)
 
 _WATCH_POLL_INTERVAL = 30  # seconds between watch condition checks
-_WATCH_GRACE_SECONDS = 300  # minimum gap between watch-triggered cycles (5 min)
+_WATCH_GRACE_SECONDS = 300          # minimum gap between back-to-back NO_TRADE watch cycles (5 min)
+_WATCH_TRADE_PLAN_GRACE_SECONDS = 900  # minimum gap after a watch-triggered TRADE_PLAN_ISSUED (15 min)
 
 
 class _SchedulerState:
@@ -110,8 +111,10 @@ class BackgroundScheduler:
         # Populated continuously by the watch loop using 1m bar OHLC overlap.
         self._entry_zone_touched: dict[int, bool] = {}
         # Prevent watch-triggered cycles from cascading: track when the last
-        # watch-triggered cycle fired and enforce a minimum grace period.
+        # watch-triggered cycle fired, whether it produced a trade plan, and
+        # enforce an appropriate minimum grace period before the next fires.
         self._last_watch_cycle_utc: datetime | None = None
+        self._last_watch_was_trade_plan: bool = False
         self._thread = threading.Thread(
             target=self._loop,
             name="drift-scheduler",
@@ -381,22 +384,29 @@ class BackgroundScheduler:
                 triggered_any = True
 
         if triggered_any and not self.state.running:
-            # Enforce a grace period between watch-triggered cycles to prevent
-            # cascading: each NO_TRADE cycle creates new watches, which could
-            # trigger immediately if the condition is already true, producing
-            # rapid back-to-back cycles every 30 seconds.
+            # Enforce a grace period between watch-triggered cycles.
+            # After a TRADE_PLAN_ISSUED the grace lasts the full cooldown
+            # window (15 min) to prevent duplicate signals. After a NO_TRADE
+            # the shorter 5-min grace guards against cascade re-triggering.
             now = datetime.now(tz=timezone.utc)
             if self._last_watch_cycle_utc is not None:
+                grace = (
+                    _WATCH_TRADE_PLAN_GRACE_SECONDS
+                    if self._last_watch_was_trade_plan
+                    else _WATCH_GRACE_SECONDS
+                )
                 elapsed = (now - self._last_watch_cycle_utc).total_seconds()
-                if elapsed < _WATCH_GRACE_SECONDS:
+                if elapsed < grace:
                     log.debug(
-                        "Watch grace period active — %.0fs remaining, skipping",
-                        _WATCH_GRACE_SECONDS - elapsed,
+                        "Watch grace period active (%s) — %.0fs remaining, skipping",
+                        "trade-plan" if self._last_watch_was_trade_plan else "no-trade",
+                        grace - elapsed,
                     )
                     return
             self._last_watch_cycle_utc = now
             self.state.record_watch_trigger()
-            self._run_cycle(trigger="watch")
+            outcome = self._run_cycle(trigger="watch")
+            self._last_watch_was_trade_plan = (outcome == "TRADE_PLAN_ISSUED")
 
 
 # ---------------------------------------------------------------------------
