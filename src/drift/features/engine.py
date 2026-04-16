@@ -53,6 +53,7 @@ class FeatureEngine:
         bars_1h: list[Bar],  # reserved for future hourly context
         last_price: float,
         session: str,
+        reference_time: datetime | None = None,
     ) -> MarketSnapshot:
         """Run all feature computers and return a scored MarketSnapshot.
 
@@ -125,6 +126,7 @@ class FeatureEngine:
             rejection_blocks=rejection_block_data.get("rejection_blocks", []),
             atr=volatility.get("atr"),
             volume_imbalance=volume.get("volume_imbalance"),
+            reference_time=reference_time,
             market_note=market_note,
         )
 

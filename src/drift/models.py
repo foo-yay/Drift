@@ -71,6 +71,11 @@ class MarketSnapshot(BaseModel):
     rejection_blocks: list[dict] = Field(default_factory=list)
     atr: float | None = None
     volume_imbalance: float | None = None
+    # Wall-clock time at the moment the cycle ran. Set to datetime.now() in live
+    # mode so time-sensitive gates (session, calendar) are not fooled by the
+    # ~15-minute data delay from yfinance. Replay mode leaves this None, and
+    # gates fall back to as_of (the bar's own timestamp — correct for replay).
+    reference_time: datetime | None = None
     market_note: str | None = None
 
 
