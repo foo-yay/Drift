@@ -79,7 +79,7 @@ def _event(final_outcome: str, minutes_ago: float) -> dict:
 class TestCooldownGateDisabled:
     def test_disabled_always_passes(self, tmp_path):
         log = tmp_path / "events.jsonl"
-        _write_log(log, [_event("SNAPSHOT_ONLY", minutes_ago=1)])
+        _write_log(log, [_event("TRADE_PLAN_ISSUED", minutes_ago=1)])
         gate = CooldownGate(_make_gates_config(cooldown_enabled=False), _make_risk_config(), log)
         result = gate.evaluate(_make_snapshot())
         assert result.passed
@@ -89,7 +89,7 @@ class TestCooldownGateDisabled:
 class TestCooldownGateZeroCooldown:
     def test_zero_cooldown_always_passes(self, tmp_path):
         log = tmp_path / "events.jsonl"
-        _write_log(log, [_event("SNAPSHOT_ONLY", minutes_ago=0.1)])
+        _write_log(log, [_event("TRADE_PLAN_ISSUED", minutes_ago=0.1)])
         gate = CooldownGate(_make_gates_config(), _make_risk_config(cooldown_minutes=0), log)
         result = gate.evaluate(_make_snapshot())
         assert result.passed
@@ -115,7 +115,7 @@ class TestCooldownGateBlocking:
     def test_blocks_when_recent_signal(self, tmp_path):
         """Signal 5 min ago, cooldown 15 min → blocked."""
         log = tmp_path / "events.jsonl"
-        _write_log(log, [_event("SNAPSHOT_ONLY", minutes_ago=5)])
+        _write_log(log, [_event("TRADE_PLAN_ISSUED", minutes_ago=5)])
         gate = CooldownGate(_make_gates_config(), _make_risk_config(cooldown_minutes=15), log)
         result = gate.evaluate(_make_snapshot())
         assert not result.passed
@@ -123,7 +123,7 @@ class TestCooldownGateBlocking:
 
     def test_reason_contains_remaining_minutes(self, tmp_path):
         log = tmp_path / "events.jsonl"
-        _write_log(log, [_event("SNAPSHOT_ONLY", minutes_ago=5)])
+        _write_log(log, [_event("TRADE_PLAN_ISSUED", minutes_ago=5)])
         gate = CooldownGate(_make_gates_config(), _make_risk_config(cooldown_minutes=15), log)
         result = gate.evaluate(_make_snapshot())
         assert "10" in result.reason  # ~10 min remaining
@@ -133,7 +133,7 @@ class TestCooldownGatePassing:
     def test_passes_when_signal_outside_window(self, tmp_path):
         """Signal 20 min ago, cooldown 15 min → passes."""
         log = tmp_path / "events.jsonl"
-        _write_log(log, [_event("SNAPSHOT_ONLY", minutes_ago=20)])
+        _write_log(log, [_event("TRADE_PLAN_ISSUED", minutes_ago=20)])
         gate = CooldownGate(_make_gates_config(), _make_risk_config(cooldown_minutes=15), log)
         result = gate.evaluate(_make_snapshot())
         assert result.passed
@@ -153,8 +153,8 @@ class TestCooldownGatePassing:
         _write_log(
             log,
             [
-                _event("SNAPSHOT_ONLY", minutes_ago=30),  # old — outside window
-                _event("SNAPSHOT_ONLY", minutes_ago=3),   # recent — should block
+                _event("TRADE_PLAN_ISSUED", minutes_ago=30),  # old — outside window
+                _event("TRADE_PLAN_ISSUED", minutes_ago=3),   # recent — should block
             ],
         )
         gate = CooldownGate(_make_gates_config(), _make_risk_config(cooldown_minutes=15), log)

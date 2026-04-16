@@ -8,9 +8,10 @@ from drift.config.models import GatesSection, RiskSection
 from drift.gates.base import Gate
 from drift.models import GateResult, MarketSnapshot
 
-# Outcomes that represent an actual signal attempt (not a gate block).
-# These are the events that count toward the cooldown timer.
-_SIGNAL_OUTCOMES = {"SNAPSHOT_ONLY", "LLM_NO_TRADE", "TRADE_PLAN_ISSUED"}
+# Only a live trade plan starts the cooldown timer.
+# NO_TRADE and BLOCKED cycles do not — the loop should be free to re-evaluate
+# on its normal schedule after those outcomes.
+_SIGNAL_OUTCOMES = {"TRADE_PLAN_ISSUED"}
 
 
 class CooldownGate(Gate):
