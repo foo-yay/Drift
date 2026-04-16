@@ -322,7 +322,7 @@ _CYCLE_BADGE = {
 }
 
 _TRIGGER_LABEL = {
-    "scheduled": "",
+    "scheduled": "🕐 ",
     "watch":     "⚡ ",
     "cooldown":  "⏰ ",
     "manual":    "👆 ",
