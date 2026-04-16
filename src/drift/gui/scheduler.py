@@ -32,6 +32,7 @@ import streamlit as st
 log = logging.getLogger(__name__)
 
 _WATCH_POLL_INTERVAL = 30  # seconds between watch condition checks
+_WATCH_GRACE_SECONDS = 300  # minimum gap between watch-triggered cycles (5 min)
 
 
 class _SchedulerState:
@@ -108,6 +109,9 @@ class BackgroundScheduler:
         # Track whether price has ever touched the entry zone for each plan (by DB id).
         # Populated continuously by the watch loop using 1m bar OHLC overlap.
         self._entry_zone_touched: dict[int, bool] = {}
+        # Prevent watch-triggered cycles from cascading: track when the last
+        # watch-triggered cycle fired and enforce a minimum grace period.
+        self._last_watch_cycle_utc: datetime | None = None
         self._thread = threading.Thread(
             target=self._loop,
             name="drift-scheduler",
@@ -141,7 +145,7 @@ class BackgroundScheduler:
         # Short delay so the process finishes starting up before the first cycle.
         time.sleep(5)
         while True:
-            outcome = self._run_cycle()
+            outcome = self._run_cycle(trigger="scheduled")
             if outcome == "BLOCKED":
                 self._schedule_cooldown_wakeup()
             else:
@@ -150,13 +154,14 @@ class BackgroundScheduler:
             self.state.next_run_utc = next_run
             time.sleep(self._interval)
 
-    def _run_cycle(self, watch_trigger: bool = False) -> str:
+    def _run_cycle(self, trigger: str = "scheduled") -> str:
         from drift.app import DriftApplication
         from drift.gui.state import _PROJECT_ROOT
         from drift.output import console as console_mod
         from drift.utils.config import load_app_config
         from rich.console import Console
 
+        watch_trigger = trigger == "watch"
         self.state.mark_running()
         buf = io.StringIO()
         capture = Console(file=buf, force_terminal=False, no_color=True, width=100)
@@ -175,7 +180,7 @@ class BackgroundScheduler:
                 "sandbox_sqlite_path":     str(root / config.storage.sandbox_sqlite_path),
             })
             abs_config = config.model_copy(update={"storage": abs_storage})
-            app = DriftApplication(abs_config, config_path=self._config_path, watch_trigger=watch_trigger)
+            app = DriftApplication(abs_config, config_path=self._config_path, watch_trigger=watch_trigger, trigger=trigger)
             outcome = app.run_once() or "unknown"
             self.state.record_run(outcome)
             return outcome
@@ -228,7 +233,7 @@ class BackgroundScheduler:
         self._resolve_expired_plans()
         if not self.state.running:
             log.info("Cooldown expired — firing one-shot unscheduled cycle")
-            self._run_cycle()
+            self._run_cycle(trigger="cooldown")
 
     def _resolve_expired_plans(self) -> None:
         """Write expiry outcomes for pending live plans whose time horizon has elapsed.
@@ -376,8 +381,22 @@ class BackgroundScheduler:
                 triggered_any = True
 
         if triggered_any and not self.state.running:
+            # Enforce a grace period between watch-triggered cycles to prevent
+            # cascading: each NO_TRADE cycle creates new watches, which could
+            # trigger immediately if the condition is already true, producing
+            # rapid back-to-back cycles every 30 seconds.
+            now = datetime.now(tz=timezone.utc)
+            if self._last_watch_cycle_utc is not None:
+                elapsed = (now - self._last_watch_cycle_utc).total_seconds()
+                if elapsed < _WATCH_GRACE_SECONDS:
+                    log.debug(
+                        "Watch grace period active — %.0fs remaining, skipping",
+                        _WATCH_GRACE_SECONDS - elapsed,
+                    )
+                    return
+            self._last_watch_cycle_utc = now
             self.state.record_watch_trigger()
-            self._run_cycle(watch_trigger=True)
+            self._run_cycle(trigger="watch")
 
 
 # ---------------------------------------------------------------------------

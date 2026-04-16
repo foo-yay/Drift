@@ -152,6 +152,7 @@ class SignalEvent(BaseModel):
     event_time: datetime
     symbol: str
     source: Literal["live", "replay", "sandbox"] = "live"
+    trigger: Literal["scheduled", "watch", "cooldown", "manual", "replay"] = "scheduled"
     signal_key: str | None = None          # deterministic dedup key — set on first write
     snapshot: dict[str, Any] | None = None
     llm_decision_raw: dict[str, Any] | None = None

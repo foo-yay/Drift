@@ -36,11 +36,12 @@ from drift.storage.watch_store import WatchStore
 
 
 class DriftApplication:
-    def __init__(self, config: AppConfig, config_path: str, sandbox: bool = False, manual_run: bool = False, watch_trigger: bool = False) -> None:
+    def __init__(self, config: AppConfig, config_path: str, sandbox: bool = False, manual_run: bool = False, watch_trigger: bool = False, trigger: str = "scheduled") -> None:
         self.config = config
         self.config_path = config_path
         self._sandbox = sandbox
         self._source = "sandbox" if sandbox else "live"
+        self._trigger = trigger
 
         # Sandbox mode writes to isolated file paths so it cannot contaminate
         # production signal data.
@@ -155,6 +156,7 @@ class DriftApplication:
                 event_time=datetime.now(tz=timezone.utc),
                 symbol=symbol,
                 source=self._source,
+                trigger=self._trigger,
                 snapshot=snapshot.model_dump(mode="json"),
                 pre_gate_report=gate_report.model_dump(mode="json"),
                 final_outcome="BLOCKED",
@@ -180,6 +182,7 @@ class DriftApplication:
                 event_time=datetime.now(tz=timezone.utc),
                 symbol=symbol,
                 source=self._source,
+                trigger=self._trigger,
                 snapshot=snapshot.model_dump(mode="json"),
                 llm_decision_raw={"text": raw_text},
                 llm_decision_parsed=raw_dict,
@@ -213,6 +216,7 @@ class DriftApplication:
                 event_time=datetime.now(tz=timezone.utc),
                 symbol=symbol,
                 source=self._source,
+                trigger=self._trigger,
                 snapshot=snapshot.model_dump(mode="json"),
                 llm_decision_raw={"text": raw_text},
                 llm_decision_parsed=raw_dict,
@@ -234,6 +238,7 @@ class DriftApplication:
             event_time=datetime.now(tz=timezone.utc),
             symbol=symbol,
             source=self._source,
+            trigger=self._trigger,
             snapshot=snapshot.model_dump(mode="json"),
             llm_decision_raw={"text": raw_text},
             llm_decision_parsed=raw_dict,
