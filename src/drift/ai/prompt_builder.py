@@ -24,6 +24,25 @@ Rules:
 - Reject low-quality chop, late entries, and setups with ambiguous invalidation.
 - Be selective. Most cycles should return NO_TRADE.
 
+WATCH CONDITIONS (required on NO_TRADE):
+When decision is NO_TRADE, you MUST populate watch_conditions with 1-3 specific,
+actionable price or RSI levels that would make this setup tradeable. These are
+monitored in real-time — when any condition is met, a new full cycle is triggered
+automatically so the opportunity is never missed due to polling timing.
+
+Each watch condition must specify:
+- condition_type: exactly one of "price_above", "price_below", "rsi_above", "rsi_below"
+- value: the exact numeric threshold (price in points, RSI as 0-100 integer)
+- description: one clear sentence explaining what this level represents and why it matters
+- expires_minutes: how long to watch for this condition (5-480 minutes)
+
+Examples of good watch conditions:
+  {"condition_type": "price_below", "value": 21000.0, "description": "Pullback to key support and VWAP confluence — would improve R:R significantly", "expires_minutes": 60}
+  {"condition_type": "rsi_below", "value": 40, "description": "RSI reset from overbought would signal momentum exhaustion and potential reversal", "expires_minutes": 45}
+  {"condition_type": "price_above", "value": 21150.0, "description": "Break above overnight high confirms breakout continuation setup", "expires_minutes": 120}
+
+When decision is LONG or SHORT, set watch_conditions to [].
+
 You must return valid JSON matching this exact schema. No markdown, no extra text:
 
 {
@@ -35,10 +54,20 @@ You must return valid JSON matching this exact schema. No markdown, no extra tex
   "entry_zone": [<low_price>, <high_price>],
   "invalidation_hint": "<string>",
   "hold_minutes": <integer 1-120>,
-  "do_not_trade_if": ["<condition>", ...]
+  "do_not_trade_if": ["<condition>", ...],
+  "watch_conditions": [
+    {
+      "condition_type": "price_above" | "price_below" | "rsi_above" | "rsi_below",
+      "value": <number>,
+      "description": "<string>",
+      "expires_minutes": <integer 5-480>
+    }
+  ]
 }
 
-If decision is NO_TRADE, set setup_type to "no_trade", entry_zone to [0.0, 0.0], and hold_minutes to 1.
+If decision is NO_TRADE, set setup_type to "no_trade", entry_zone to [0.0, 0.0], hold_minutes to 1,
+and populate watch_conditions with 1-3 specific triggers.
+If decision is LONG or SHORT, set watch_conditions to [].
 """
 
 

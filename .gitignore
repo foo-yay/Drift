@@ -9,7 +9,10 @@ __pycache__/
 build/
 dist/
 data/*.db
+data/*.db-shm
+data/*.db-wal
 data/.kill_switch
+data/*.csv
 logs/*.csv
 logs/*.jsonl
 src/logs/
