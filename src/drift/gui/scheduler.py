@@ -84,12 +84,24 @@ class BackgroundScheduler:
 
     Also spawns a second daemon thread that polls active watch conditions
     every 30 seconds and fires an immediate cycle when any condition is met.
+
+    When a scheduled cycle is blocked by the cooldown gate the scheduler
+    calculates exactly how many seconds remain in the cooldown window and
+    arms a one-shot ``threading.Timer``.  That timer fires a single extra
+    cycle the moment the window expires, so no opportunity is missed due to
+    the fixed loop interval being out of phase with the cooldown expiry.
+    The cooldown duration itself is driven by ``max_hold_minutes`` stored on
+    the most-recent trade-plan event in the JSONL log, falling back to the
+    configured ``risk.cooldown_minutes`` when that field is absent.
     """
 
     def __init__(self, config_path: str, loop_interval_seconds: int) -> None:
         self._config_path = config_path
         self._interval = loop_interval_seconds
         self.state = _SchedulerState()
+        # One-shot timer that fires a cycle exactly when the cooldown expires.
+        self._cooldown_timer: threading.Timer | None = None
+        self._cooldown_timer_lock = threading.Lock()
         self._thread = threading.Thread(
             target=self._loop,
             name="drift-scheduler",
@@ -123,12 +135,16 @@ class BackgroundScheduler:
         # Short delay so the process finishes starting up before the first cycle.
         time.sleep(5)
         while True:
-            self._run_cycle()
+            outcome = self._run_cycle()
+            if outcome == "BLOCKED":
+                self._schedule_cooldown_wakeup()
+            else:
+                self._cancel_cooldown_timer()
             next_run = datetime.now(tz=timezone.utc) + timedelta(seconds=self._interval)
             self.state.next_run_utc = next_run
             time.sleep(self._interval)
 
-    def _run_cycle(self, watch_trigger: bool = False) -> None:
+    def _run_cycle(self, watch_trigger: bool = False) -> str:
         from drift.app import DriftApplication
         from drift.gui.state import _PROJECT_ROOT
         from drift.output import console as console_mod
@@ -156,11 +172,69 @@ class BackgroundScheduler:
             app = DriftApplication(abs_config, config_path=self._config_path, watch_trigger=watch_trigger)
             outcome = app.run_once() or "unknown"
             self.state.record_run(outcome)
+            return outcome
         except Exception as exc:  # noqa: BLE001
             log.exception("Scheduler cycle error: %s", exc)
             self.state.record_run("error", str(exc))
+            return "error"
         finally:
             console_mod.console = orig
+
+    # ------------------------------------------------------------------
+    # Cooldown wakeup helpers
+    # ------------------------------------------------------------------
+
+    def _schedule_cooldown_wakeup(self) -> None:
+        """Arm a one-shot timer to fire a cycle exactly when cooldown expires.
+
+        Only one pending timer is allowed at a time; any pre-existing timer is
+        cancelled before the new one is set.  A 2-second buffer is added so the
+        gate evaluation runs comfortably after the window has actually cleared.
+        """
+        seconds = self._get_cooldown_remaining_seconds()
+        if seconds is None or seconds <= 0:
+            return
+        delay = seconds + 2.0  # small buffer so the gate definitely passes
+        with self._cooldown_timer_lock:
+            if self._cooldown_timer is not None:
+                self._cooldown_timer.cancel()
+            self._cooldown_timer = threading.Timer(delay, self._run_once_after_cooldown)
+            self._cooldown_timer.daemon = True
+            self._cooldown_timer.start()
+        log.info(
+            "Cooldown wakeup scheduled in %.0fs (%.1f min)",
+            delay, delay / 60,
+        )
+
+    def _cancel_cooldown_timer(self) -> None:
+        """Cancel any pending cooldown wakeup (successful cycle makes it moot)."""
+        with self._cooldown_timer_lock:
+            if self._cooldown_timer is not None:
+                self._cooldown_timer.cancel()
+                self._cooldown_timer = None
+
+    def _run_once_after_cooldown(self) -> None:
+        """Callback fired by the one-shot cooldown timer."""
+        with self._cooldown_timer_lock:
+            self._cooldown_timer = None  # mark as consumed
+        if not self.state.running:
+            log.info("Cooldown expired — firing one-shot unscheduled cycle")
+            self._run_cycle()
+
+    def _get_cooldown_remaining_seconds(self) -> float | None:
+        """Instantiate the cooldown gate and query how many seconds remain."""
+        from drift.gates.cooldown_gate import CooldownGate
+        from drift.gui.state import _PROJECT_ROOT
+        from drift.utils.config import load_app_config
+        try:
+            config = load_app_config(self._config_path)
+            root = _PROJECT_ROOT
+            log_path = str(root / config.storage.jsonl_event_log)
+            gate = CooldownGate(config.gates, config.risk, log_path)
+            return gate.seconds_remaining()
+        except Exception as exc:  # noqa: BLE001
+            log.debug("Could not query cooldown remaining: %s", exc)
+            return None
 
     # ------------------------------------------------------------------
     # Watch condition poll loop (every 30s)

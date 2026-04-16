@@ -76,6 +76,16 @@ def _event(final_outcome: str, minutes_ago: float) -> dict:
     return {"event_time": ts.isoformat(), "final_outcome": final_outcome}
 
 
+def _event_with_plan(minutes_ago: float, max_hold_minutes: int) -> dict:
+    """TRADE_PLAN_ISSUED event that includes a trade_plan.max_hold_minutes field."""
+    ts = datetime.now(tz=timezone.utc) - timedelta(minutes=minutes_ago)
+    return {
+        "event_time": ts.isoformat(),
+        "final_outcome": "TRADE_PLAN_ISSUED",
+        "trade_plan": {"max_hold_minutes": max_hold_minutes},
+    }
+
+
 class TestCooldownGateDisabled:
     def test_disabled_always_passes(self, tmp_path):
         log = tmp_path / "events.jsonl"
@@ -160,3 +170,89 @@ class TestCooldownGatePassing:
         gate = CooldownGate(_make_gates_config(), _make_risk_config(cooldown_minutes=15), log)
         result = gate.evaluate(_make_snapshot())
         assert not result.passed
+
+
+class TestCooldownGateDynamicHoldMinutes:
+    """Cooldown window is driven by trade_plan.max_hold_minutes from the JSONL event."""
+
+    def test_uses_max_hold_minutes_from_trade_plan(self, tmp_path):
+        """Plan with 30-min hold: signal 20 min ago should still be blocked."""
+        log = tmp_path / "events.jsonl"
+        _write_log(log, [_event_with_plan(minutes_ago=20, max_hold_minutes=30)])
+        # Config says 15 min — but plan says 30 min, so 20 min ago must block.
+        gate = CooldownGate(_make_gates_config(), _make_risk_config(cooldown_minutes=15), log)
+        result = gate.evaluate(_make_snapshot())
+        assert not result.passed
+        assert "30" in result.reason  # window shown in reason
+
+    def test_plan_hold_minutes_shorter_than_config(self, tmp_path):
+        """Plan with 10-min hold: signal 12 min ago should pass even though config is 15."""
+        log = tmp_path / "events.jsonl"
+        _write_log(log, [_event_with_plan(minutes_ago=12, max_hold_minutes=10)])
+        gate = CooldownGate(_make_gates_config(), _make_risk_config(cooldown_minutes=15), log)
+        result = gate.evaluate(_make_snapshot())
+        assert result.passed
+
+    def test_falls_back_to_config_when_trade_plan_absent(self, tmp_path):
+        """Events without trade_plan field fall back to risk.cooldown_minutes."""
+        log = tmp_path / "events.jsonl"
+        _write_log(log, [_event("TRADE_PLAN_ISSUED", minutes_ago=5)])
+        gate = CooldownGate(_make_gates_config(), _make_risk_config(cooldown_minutes=15), log)
+        result = gate.evaluate(_make_snapshot())
+        assert not result.passed  # 5 min ago < 15 min config → still blocked
+
+    def test_most_recent_plan_hold_minutes_wins(self, tmp_path):
+        """When multiple events exist, hold_minutes comes from the most-recent one."""
+        log = tmp_path / "events.jsonl"
+        _write_log(
+            log,
+            [
+                _event_with_plan(minutes_ago=40, max_hold_minutes=60),  # old, irrelevant
+                _event_with_plan(minutes_ago=5,  max_hold_minutes=10),  # recent — 10-min hold
+            ],
+        )
+        # Signal 5 min ago, hold=10 min → 5 min remaining → blocked
+        gate = CooldownGate(_make_gates_config(), _make_risk_config(cooldown_minutes=15), log)
+        result = gate.evaluate(_make_snapshot())
+        assert not result.passed
+        assert "10" in result.reason  # 10-min window shown
+
+
+class TestCooldownGateSecondsRemaining:
+    def test_returns_none_when_no_log(self, tmp_path):
+        log = tmp_path / "events.jsonl"
+        gate = CooldownGate(_make_gates_config(), _make_risk_config(cooldown_minutes=15), log)
+        assert gate.seconds_remaining() is None
+
+    def test_returns_none_when_cooldown_clear(self, tmp_path):
+        """Signal 20 min ago, cooldown 15 min → already clear → None."""
+        log = tmp_path / "events.jsonl"
+        _write_log(log, [_event("TRADE_PLAN_ISSUED", minutes_ago=20)])
+        gate = CooldownGate(_make_gates_config(), _make_risk_config(cooldown_minutes=15), log)
+        assert gate.seconds_remaining() is None
+
+    def test_returns_positive_seconds_when_active(self, tmp_path):
+        """Signal 5 min ago, cooldown 15 min → ~600 seconds remaining."""
+        log = tmp_path / "events.jsonl"
+        _write_log(log, [_event("TRADE_PLAN_ISSUED", minutes_ago=5)])
+        gate = CooldownGate(_make_gates_config(), _make_risk_config(cooldown_minutes=15), log)
+        remaining = gate.seconds_remaining()
+        assert remaining is not None
+        assert 550 < remaining < 620  # ~10 min ± small timing tolerance
+
+    def test_returns_none_when_disabled(self, tmp_path):
+        """Gate disabled → seconds_remaining always None."""
+        log = tmp_path / "events.jsonl"
+        _write_log(log, [_event("TRADE_PLAN_ISSUED", minutes_ago=1)])
+        gate = CooldownGate(_make_gates_config(cooldown_enabled=False), _make_risk_config(), log)
+        assert gate.seconds_remaining() is None
+
+    def test_uses_max_hold_minutes_for_remaining_calculation(self, tmp_path):
+        """Remaining seconds reflect max_hold_minutes, not config cooldown_minutes."""
+        log = tmp_path / "events.jsonl"
+        _write_log(log, [_event_with_plan(minutes_ago=5, max_hold_minutes=30)])
+        gate = CooldownGate(_make_gates_config(), _make_risk_config(cooldown_minutes=15), log)
+        remaining = gate.seconds_remaining()
+        assert remaining is not None
+        # 30 min hold − 5 min elapsed = ~25 min = ~1500 s
+        assert 1450 < remaining < 1560
