@@ -69,6 +69,10 @@ strategy:
     - pullback_continuation
     - breakout_continuation
     - failed_breakout_reversion
+    - vwap_reclaim
+    - opening_range_breakout
+    - mean_reversion
+    - range_fade
   extension_atr_threshold: 1.2
   chase_buffer_points: 4.0
   structure_buffer_points: 2.0
