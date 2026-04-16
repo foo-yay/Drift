@@ -57,7 +57,7 @@ class LLMClient:
             try:
                 response = self._client.messages.create(
                     model=self._config.model,
-                    max_tokens=1024,
+                    max_tokens=2048,
                     temperature=self._config.temperature,
                     system=system,
                     messages=messages,
