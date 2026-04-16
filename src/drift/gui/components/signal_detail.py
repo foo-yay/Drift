@@ -118,10 +118,18 @@ def show_signal_detail(sig: SignalRow) -> None:
         else:
             st.caption("No gate report stored.")
 
-        # Blocked reason (top-level final_reason is more informative for BLOCKED)
-        if sig.final_outcome == "BLOCKED" and sig.final_reason:
-            st.markdown("**Block Reason**")
-            st.warning(sig.final_reason, icon="🚫")
+        # Blocked reason (derived from the failed gate in the gate report)
+        if sig.final_outcome == "BLOCKED":
+            block_reason: str | None = None
+            gate_report = sig.gate_report
+            if gate_report:
+                for r in gate_report.get("results", []):
+                    if not r.get("passed", True):
+                        block_reason = r.get("reason")
+                        break
+            if block_reason:
+                st.markdown("**Block Reason**")
+                st.warning(block_reason, icon="🚫")
 
     # ── Footer ────────────────────────────────────────────────────────────────
     st.divider()
