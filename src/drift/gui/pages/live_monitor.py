@@ -321,6 +321,14 @@ _CYCLE_BADGE = {
     "BLOCKED":           ("🔴", "#e53935", "Blocked"),
 }
 
+_TRIGGER_LABEL = {
+    "scheduled": "🕐 ",
+    "watch":     "⚡ ",
+    "cooldown":  "⏰ ",
+    "manual":    "👆 ",
+    "replay":    "🔄 ",
+}
+
 
 def _render_status_panel(store) -> None:
     """Shows engine status, Run Now button, and compact cycle history."""
@@ -499,6 +507,7 @@ def _render_cycle_row(sig, *, key: str, latest: bool) -> None:
     from drift.gui.components.signal_detail import show_signal_detail
 
     icon, _color, short_label = _CYCLE_BADGE.get(sig.final_outcome, ("⚪", "#888", sig.final_outcome))
+    trigger_prefix = _TRIGGER_LABEL.get(getattr(sig, "trigger", "scheduled"), "")
     try:
         ts = datetime.fromisoformat(sig.event_time_utc)
         if ts.tzinfo is None:
@@ -507,7 +516,7 @@ def _render_cycle_row(sig, *, key: str, latest: bool) -> None:
     except (ValueError, TypeError):
         label_time = "—"
 
-    label = f"{icon} **{short_label}**   {label_time}   ›"
+    label = f"{icon} {trigger_prefix}**{short_label}**   {label_time}   ›"
     if st.button(label, key=f"detail_{key}", use_container_width=True):
         show_signal_detail(sig)
 
@@ -568,7 +577,7 @@ def _run_cycle_now(config) -> None:
     outcome  = "success"
     error_msg = ""
     try:
-        app = DriftApplication(abs_config, config_path=config_path, sandbox=sandbox, manual_run=not sandbox)
+        app = DriftApplication(abs_config, config_path=config_path, sandbox=sandbox, manual_run=not sandbox, trigger="manual")
         with st.spinner("Running analysis cycle…"):
             app.run_once()
     except Exception as exc:  # noqa: BLE001

@@ -838,11 +838,7 @@ A daily P&L gate ("halt signals once session is green") is architecturally plann
 
 ## 23.5 Auto-execution extensibility
 
-The system will include an `ExecutionAdapter` interface in `planning/` with:
-- `NullAdapter` — no-op (current behavior, always active in V1)
-- `NinjaTraderAdapter` stub — writes signal file to a watched directory
-
-This seam means integrating NinjaTrader or another broker later requires only implementing the adapter, not restructuring the signal pipeline.
+> **Superseded by Phase 29.** The full execution layer design — including abstract interface, Tradovate/TopstepX adapter, NinjaTrader file-based adapter, and IB adapter — is documented in §29. The original NinjaTrader stub described here was never built and is replaced by the Phase 29 architecture.
 
 ---
 
@@ -2352,6 +2348,269 @@ The gate logic in `TradePlanBuilder` requires zero changes — it reads `snapsho
 4. Add a `_recon_loop()` method to `BackgroundScheduler` (runs in a separate daemon thread, `time.sleep(5)` cadence).
 5. On divergence: call `_handle_divergence()` which logs to JSONL, optionally posts a Discord webhook, and sets a `recon_error` sentinel that the main gate runner checks (similar to kill switch).
 
-**Dependency:** This feature requires the same authenticated exchange connection as execution. Implement alongside the TopstepX/Tradovate API integration (Phase E of the broader roadmap).
+**Dependency:** This feature requires the same authenticated exchange connection as execution. Implement alongside the TopstepX/Tradovate API integration (Phase 29).
+
+---
+
+---
+
+# 29. Execution Layer — Broker Integration
+
+*Documented April 2026. Not scheduled — build only after live signal quality is validated with manual execution.*
+
+---
+
+## 29.1 Design goal
+
+Add an optional execution layer that can place, manage, and close trades on a live broker when the engine issues a TRADE_PLAN_ISSUED signal. The operator can still run in manual mode (default) — execution is opt-in via config.
+
+**Critical constraint:** The execution layer is a *consumer* of trade plans. It must never influence signal generation. The LLM, gates, and planning pipeline remain identical whether execution is on or off.
+
+---
+
+## 29.2 Broker comparison for MNQ
+
+| Broker | API Protocol | Python Library | MNQ/NQ | Auth Model | Notes |
+|---|---|---|---|---|---|
+| **Tradovate (TopstepX)** | WebSocket + REST | `tradovate-api` (community) or raw `websockets` | Yes | OAuth2 token | TopstepX funded accounts route through Tradovate. If TopstepX is your venue, this is the only option that makes sense. Real-time order events, position sync, L2 DOM — all available. |
+| **NinjaTrader** | ATI (local TCP/IP) or file-based signal ingestion | None (raw socket or file I/O) | Yes | Local connection (NinjaTrader must be running) | Simplest integration: write a signal file to a watched directory. NinjaTrader parses it and places the order. No WebSocket, no OAuth. Downside: requires NinjaTrader desktop running on same machine. |
+| **Interactive Brokers** | TWS API (socket) | `ib_insync` (mature, well-maintained) | Yes | Local TWS or IB Gateway must be running | Best Python API of the three. But requires a funded IB account — adds a broker you may not already use. Best choice only if you're already on IB. |
+
+**Recommendation:** Use Tradovate's API if trading through TopstepX. Use NinjaTrader's file-based ingestion if you want the simplest possible integration with zero WebSocket complexity. Use IB only if you're already an IB customer.
+
+The abstract interface supports all three — the choice is which concrete adapter to implement first.
+
+---
+
+## 29.3 Architecture
+
+```
+src/drift/
+  execution/
+    __init__.py
+    base.py               # ExecutionAdapter ABC
+    null_adapter.py        # No-op (manual mode, default)
+    tradovate_adapter.py   # Tradovate/TopstepX WebSocket implementation
+    ninja_adapter.py       # NinjaTrader file-based signal writer
+    ib_adapter.py          # Interactive Brokers via ib_insync (optional)
+    position_tracker.py    # Internal position state machine
+    order_manager.py       # OCO bracket logic (entry + SL + TP)
+```
+
+### Abstract interface
+
+```python
+from abc import ABC, abstractmethod
+from drift.models import TradePlan
+
+
+class ExecutionAdapter(ABC):
+    """Broker-agnostic execution interface."""
+
+    @abstractmethod
+    def connect(self) -> None:
+        """Establish connection to broker. Raise on failure."""
+
+    @abstractmethod
+    def disconnect(self) -> None:
+        """Clean shutdown of broker connection."""
+
+    @abstractmethod
+    def place_bracket_order(self, plan: TradePlan) -> str:
+        """Place entry + SL + TP as a bracket/OCO group.
+        Returns broker-assigned order group ID."""
+
+    @abstractmethod
+    def cancel_order_group(self, group_id: str) -> None:
+        """Cancel all orders in a bracket group."""
+
+    @abstractmethod
+    def get_open_positions(self, symbol: str) -> list:
+        """Return current open positions for symbol."""
+
+    @abstractmethod
+    def get_account_balance(self) -> float:
+        """Return current account balance/equity."""
+
+    @property
+    @abstractmethod
+    def is_connected(self) -> bool:
+        """Whether the broker connection is active."""
+```
+
+### NullAdapter (default — current behavior)
+
+```python
+class NullAdapter(ExecutionAdapter):
+    """No-op adapter for manual execution mode."""
+
+    def connect(self) -> None: pass
+    def disconnect(self) -> None: pass
+    def place_bracket_order(self, plan): return "manual"
+    def cancel_order_group(self, group_id): pass
+    def get_open_positions(self, symbol): return []
+    def get_account_balance(self): return 0.0
+
+    @property
+    def is_connected(self) -> bool:
+        return True  # always "connected" — it's a no-op
+```
+
+---
+
+## 29.4 Tradovate adapter design (TopstepX)
+
+### Authentication flow
+1. POST to `https://live.tradovateapi.com/v1/auth/accesstokenrequest` with credentials
+2. Receive access token + WebSocket URL
+3. Open WebSocket to `wss://live.tradovateapi.com/v1/websocket`
+4. Heartbeat every 2.5 seconds to keep connection alive
+
+### Order placement
+Tradovate uses OCO (One-Cancels-Other) bracket orders natively:
+
+1. `order/placeorder` — Limit entry at `entry_mid` (midpoint of entry zone)
+2. Attach SL as a stop-market at `plan.stop_loss`
+3. Attach TP1 as a limit at `plan.take_profit_1`
+4. The bracket is linked — filling the SL cancels the TP and vice versa
+
+### Position monitoring
+Subscribe to `user/syncrequest` WebSocket channel. Tradovate pushes real-time:
+- Order status changes (Working → Filled → Cancelled)
+- Position updates (entry, partial fill, flat)
+- Account balance updates
+
+This feeds directly into the Blind Recon system (§28.3) — same WebSocket, same data.
+
+### Configuration
+
+```yaml
+execution:
+  enabled: false                    # default off — manual mode
+  adapter: "tradovate"              # or "ninjatrader", "ib", "null"
+  tradovate:
+    environment: "live"             # "live" or "demo"
+    username: "${TRADOVATE_USER}"   # env var reference
+    password: "${TRADOVATE_PASS}"
+    device_id: "${TRADOVATE_DEVICE}"
+    app_id: "Drift"
+    app_version: "1.0"
+    cid: "${TRADOVATE_CID}"
+    sec: "${TRADOVATE_SEC}"
+  risk:
+    max_position_size: 1            # max contracts per signal
+    max_daily_loss: 200.0           # USD — hard stop, kill switch if breached
+    require_bracket: true           # never place naked entries
+```
+
+Credentials must come from environment variables — never stored in YAML or committed to git.
+
+---
+
+## 29.5 NinjaTrader adapter design (file-based)
+
+### How it works
+NinjaTrader's ATI (Automated Trading Interface) can watch a directory for signal files. Drift writes a structured file; NinjaTrader reads it and places the order.
+
+### Signal file format
+
+```text
+INSTRUMENT=MNQ 06-26
+ACTION=BUY
+QUANTITY=1
+ORDER_TYPE=LIMIT
+LIMIT_PRICE=21044.00
+STOP_LOSS=21018.00
+TAKE_PROFIT=21065.00
+TIF=GTC
+```
+
+### Implementation
+1. Write signal file to configured directory (e.g., `~/NinjaTrader/incoming/`)
+2. NinjaTrader picks it up within 1 second
+3. Drift polls a response directory for fill confirmations
+
+### Limitations
+- No real-time position sync without NinjaTrader's ATI socket connection
+- Requires NinjaTrader desktop running on same machine
+- File-based approach has inherent latency (~1-2 seconds)
+- Blind Recon (§28.3) would need the ATI socket, not just file I/O
+
+---
+
+## 29.6 Order lifecycle and position tracking
+
+### State machine
+
+```
+IDLE → PENDING_ENTRY → FILLED → (PENDING_EXIT) → FLAT
+                ↓                       ↓
+            CANCELLED              SL_FILLED / TP_FILLED
+```
+
+### Entry management
+1. Signal issued → place limit order at `entry_mid` (midpoint of entry zone)
+2. If not filled within `entry_timeout_seconds` (configurable, default 120) → cancel
+3. On fill → log entry, start tracking position
+
+### Exit management
+1. SL and TP are placed as OCO bracket at entry time
+2. If `hold_minutes` expires before SL/TP hit → market-close the position (time stop)
+3. On any exit → log P&L, clear position, start cooldown
+
+### Integration with existing scheduler
+The execution layer hooks into `BackgroundScheduler`:
+- `_run_cycle()` returns TRADE_PLAN_ISSUED → call `adapter.place_bracket_order(plan)`
+- `_watch_loop` TP/SL resolution → if execution enabled, adapter already placed these as OCO, so Drift just syncs state
+- Cooldown timer → same behavior, but now also cancels any unfilled entry orders
+
+---
+
+## 29.7 Safety requirements
+
+1. **Bracket-only orders.** The adapter must refuse to place an entry without an attached SL. No naked entries, ever.
+2. **Single position limit.** Never hold more than one position per symbol simultaneously.
+3. **Daily loss limit.** If cumulative realized losses exceed `max_daily_loss`, activate kill switch automatically.
+4. **Connection loss behavior.** If WebSocket disconnects mid-trade, the bracket orders are already on the exchange — they persist. On reconnect, sync position state before doing anything else.
+5. **Startup safety.** On `connect()`, always call `get_open_positions()` first. If there's an unexpected open position, log a warning and block all new orders until the operator acknowledges.
+6. **Credential isolation.** All secrets via environment variables. Config files contain only `${VAR_NAME}` references, never plaintext credentials.
+
+---
+
+## 29.8 Build phases
+
+### Phase 29a — Abstract interface + NullAdapter
+- `execution/base.py` — `ExecutionAdapter` ABC
+- `execution/null_adapter.py` — no-op (preserves current manual behavior)
+- `execution/position_tracker.py` — internal state machine
+- Wire into `DriftApplication`: config flag `execution.enabled` selects adapter
+- Tests: adapter interface contract, null adapter no-ops, position state transitions
+
+### Phase 29b — Tradovate adapter (TopstepX)
+- `execution/tradovate_adapter.py` — OAuth2 auth, WebSocket connection, OCO bracket placement
+- Tradovate demo environment testing (paper trading)
+- Position sync feeds into Blind Recon (§28.3)
+- Tests: mock WebSocket, order lifecycle, reconnection handling
+
+### Phase 29c — NinjaTrader adapter (optional)
+- `execution/ninja_adapter.py` — file-based signal writer
+- Only if NinjaTrader is the chosen platform
+- Tests: file format validation, directory polling
+
+### Phase 29d — IB adapter (optional)
+- `execution/ib_adapter.py` — `ib_insync` wrapper
+- Only if migrating to Interactive Brokers
+- Tests: mock TWS connection, bracket order placement
+
+---
+
+## 29.9 Prerequisites before building
+
+Do not build the execution layer until:
+
+1. **Live signal quality is validated.** At least 2 weeks of manual trading confirms the signals are worth executing. Building execution before validating the signal quality is premature optimization.
+2. **Broker account is funded and API access is confirmed.** Tradovate API requires an approved application ID. TopstepX funded accounts automatically have Tradovate API access.
+3. **Blind Recon (§28.3) is designed.** Execution without position reconciliation is dangerous. The recon loop should ship in the same PR as the first real adapter.
+4. **Paper trading validation.** Every adapter must be tested against the broker's demo/sim environment before touching real capital.
 
 

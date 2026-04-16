@@ -256,7 +256,7 @@ def _run_cycle(config) -> None:
     outcome   = "unknown"
     error_msg = ""
     try:
-        app = DriftApplication(abs_config, config_path=config_path, sandbox=sandbox, manual_run=not sandbox)
+        app = DriftApplication(abs_config, config_path=config_path, sandbox=sandbox, manual_run=not sandbox, trigger="manual")
         with st.spinner("Running analysis cycle…"):
             outcome = app.run_once() or "unknown"
     except Exception as exc:  # noqa: BLE001

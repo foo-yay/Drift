@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS signals (
     signal_key       TEXT UNIQUE NOT NULL,
     symbol           TEXT NOT NULL,
     source           TEXT NOT NULL,
+    trigger          TEXT NOT NULL DEFAULT 'scheduled',
     event_time_utc   TEXT NOT NULL,
     as_of_utc        TEXT,
     final_outcome    TEXT NOT NULL,
@@ -96,6 +97,7 @@ class SignalRow:
     gate_report_json: str | None
     llm_json: str | None
     created_at: str
+    trigger: str = "scheduled"
 
     # ------------------------------------------------------------------
     # Convenience accessors
@@ -144,6 +146,10 @@ class SignalStore:
         # scheduler's write connection without either blocking the other.
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_DDL)
+        # Migrate existing databases: add 'trigger' column if missing.
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(signals)").fetchall()}
+        if "trigger" not in cols:
+            self._conn.execute("ALTER TABLE signals ADD COLUMN trigger TEXT NOT NULL DEFAULT 'scheduled'")
         self._conn.commit()
 
     # ------------------------------------------------------------------
@@ -173,7 +179,7 @@ class SignalStore:
         cur = self._conn.execute(
             """
             INSERT OR IGNORE INTO signals (
-                signal_key, symbol, source, event_time_utc, as_of_utc,
+                signal_key, symbol, source, trigger, event_time_utc, as_of_utc,
                 final_outcome, bias, setup_type, confidence,
                 entry_min, entry_max, stop_loss,
                 take_profit_1, take_profit_2, reward_risk,
@@ -181,7 +187,7 @@ class SignalStore:
                 snapshot_json, gate_report_json, llm_json,
                 created_at
             ) VALUES (
-                ?,?,?,?,?,
+                ?,?,?,?,?,?,
                 ?,?,?,?,
                 ?,?,?,
                 ?,?,?,
@@ -194,6 +200,7 @@ class SignalStore:
                 event.signal_key,
                 event.symbol,
                 event.source,
+                event.trigger,
                 event.event_time.isoformat(),
                 as_of,
                 event.final_outcome,
@@ -446,6 +453,7 @@ def _row_to_signal(row: sqlite3.Row) -> SignalRow:
         signal_key=row["signal_key"],
         symbol=row["symbol"],
         source=row["source"],
+        trigger=row["trigger"],
         event_time_utc=row["event_time_utc"],
         as_of_utc=row["as_of_utc"],
         final_outcome=row["final_outcome"],
