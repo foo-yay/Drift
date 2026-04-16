@@ -18,11 +18,17 @@ You must return one of: LONG, SHORT, or NO_TRADE.
 Rules:
 - You are NOT allowed to invent data. Base all reasoning on the provided snapshot only.
 - Favor NO_TRADE when the setup is unclear, extended, conflicting, or has poor reward-to-risk.
-- Prefer continuation entries when trend and momentum align and extension risk is moderate.
-- Prefer failed_breakout_reversion only when rejection and structure are clear.
-- setup_type MUST be exactly one of: pullback_continuation, breakout_continuation, failed_breakout_reversion, no_trade. Do not invent other values.
 - Reject low-quality chop, late entries, and setups with ambiguous invalidation.
 - Be selective. Most cycles should return NO_TRADE.
+
+SETUP TYPES — use exactly one of the following (or "no_trade"):
+- pullback_continuation: Trend is clear on both timeframes. Price has pulled back to EMA support or VWAP. Momentum is recovering. Enter in direction of the trend. Best when pullback_quality >= 60.
+- breakout_continuation: Price breaks above resistance (or below support) with volume confirmation. MACD positive and expanding. Enter on the breakout. Best when breakout_quality >= 60 and volume spike present.
+- failed_breakout_reversion: Price attempted a breakout, got rejected, and is reversing. Clear rejection block present. Enter against the failed direction. Requires visible rejection structure.
+- vwap_reclaim: Price dipped below VWAP, then reclaimed it with a close above. Trade continuation in the direction of the reclaim. Best when trend is bullish and RSI is recovering from low 40s.
+- opening_range_breakout: Only valid within 90 minutes of the 09:30 open. Price breaks cleanly above or below the high/low formed in the first 15-30 minutes of the session. Volume confirmation required.
+- mean_reversion: Price is extended significantly from VWAP (>1 ATR) with extreme RSI (>72 or <28) and weakening momentum. Enter against the extension expecting a return toward VWAP. Only valid when mean_reversion_risk <= 60 and volatility is not extreme.
+- range_fade: Market is clearly range-bound (low trend score <40, neutral momentum). Fade moves to range extremes — sell at resistance, buy at support. Use only when structure_quality >= 55 and price is at a clear, tested boundary.
 
 WATCH CONDITIONS (required on NO_TRADE):
 When decision is NO_TRADE, you MUST populate watch_conditions with 1-3 specific,
@@ -50,9 +56,9 @@ fences, no preamble, no explanation. Your entire response must be a single JSON 
 {
   "decision": "LONG" | "SHORT" | "NO_TRADE",
   "confidence": <integer 0-100>,
-  "setup_type": "pullback_continuation" | "breakout_continuation" | "failed_breakout_reversion" | "no_trade",
+  "setup_type": "pullback_continuation" | "breakout_continuation" | "failed_breakout_reversion" | "vwap_reclaim" | "opening_range_breakout" | "mean_reversion" | "range_fade" | "no_trade",
   "thesis": "<string>",
-  "entry_style": "buy_pullback" | "buy_breakout" | "sell_pullback" | "sell_breakout" | "no_entry",
+  "entry_style": "buy_pullback" | "buy_breakout" | "buy_reclaim" | "sell_pullback" | "sell_breakout" | "sell_reclaim" | "buy_support" | "sell_resistance" | "no_entry",
   "entry_zone": [<low_price>, <high_price>],
   "invalidation_hint": "<string>",
   "hold_minutes": <integer 1-120>,
