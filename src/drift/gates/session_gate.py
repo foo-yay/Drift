@@ -49,9 +49,11 @@ class SessionGate(Gate):
                 reason=f"Market not in regular session (status: '{snapshot.session}').",
             )
 
-        # Use the snapshot timestamp so replay evaluates gates against the bar's
-        # actual time, not the current wall-clock time.
-        ref_dt = snapshot.as_of.astimezone(_ET)
+        # Use reference_time (wall-clock moment the cycle ran) when available so
+        # live mode is not fooled by the ~15-minute yfinance data delay.
+        # Replay mode leaves reference_time as None and falls back to as_of
+        # (the bar's own timestamp), which is correct for historical evaluation.
+        ref_dt = (snapshot.reference_time or snapshot.as_of).astimezone(_ET)
         current_time = ref_dt.time().replace(second=0, microsecond=0)
 
         # Additional skip window guard: first N minutes after official open.

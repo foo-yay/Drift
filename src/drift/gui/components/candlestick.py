@@ -199,8 +199,13 @@ def build_candlestick_chart(
 
     if show_vwap and bars:
         import datetime as _dt
+        # Anchor the RTH session open to the bars' own date (not today's
+        # wall-clock date) so the chart works correctly for replay/historical
+        # bars as well as live bars.
+        _last_ts = bars[-1].timestamp if bars[-1].timestamp.tzinfo else bars[-1].timestamp.replace(tzinfo=timezone.utc)
+        _bar_date = _last_ts.astimezone(timezone.utc).date()
         rth_open_utc = _dt.datetime(
-            _dt.date.today().year, _dt.date.today().month, _dt.date.today().day,
+            _bar_date.year, _bar_date.month, _bar_date.day,
             14, 30, tzinfo=timezone.utc,  # 09:30 ET = 14:30 UTC
         )
         vwap_ts: list = []

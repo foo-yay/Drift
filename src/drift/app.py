@@ -135,6 +135,7 @@ class DriftApplication:
             bars_1h=bars_1h,
             last_price=last_price,
             session=session,
+            reference_time=datetime.now(timezone.utc),
         )
         render_snapshot(snapshot)
 
