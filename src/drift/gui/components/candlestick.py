@@ -83,6 +83,8 @@ def build_candlestick_chart(
     show_vwap: bool = False,
     show_order_blocks: bool = False,
     overlay_data: "dict[str, Any] | None" = None,
+    live_price: float | None = None,
+    watch_levels: "list[dict] | None" = None,
 ) -> go.Figure:
     """Build a Plotly candlestick chart with optional overlays.
 
@@ -98,6 +100,13 @@ def build_candlestick_chart(
                            from ``overlay_data``.
         overlay_data: Dict of pre-computed overlay values (see module docstring).
                       Safe to omit or pass ``None`` — missing keys are ignored.
+        live_price: When provided, draws a dotted horizontal line at this price
+                    level labelled "Live".  Use ``fast_info.last_price`` from
+                    yfinance — it is near-real-time (~seconds stale).
+        watch_levels: Active watch conditions to overlay as horizontal lines.
+                      Each dict must have ``condition_type`` and ``value`` keys.
+                      Only ``price_above`` / ``price_below`` types are drawn
+                      (RSI watches have no meaningful price-axis representation).
 
     Returns:
         A configured Plotly ``Figure`` ready for ``st.plotly_chart()``.
@@ -277,6 +286,38 @@ def build_candlestick_chart(
                 showarrow=False,
                 xanchor="right",
                 font=dict(size=9, color=line_c),
+            )
+
+    # -- Live price line ------------------------------------------------
+    if live_price is not None and bars:
+        fig.add_hline(
+            y=live_price,
+            line=dict(color="rgba(255, 255, 255, 0.50)", width=1, dash="dot"),
+            annotation_text=f"Live  {live_price:,.2f}",
+            annotation_position="bottom right",
+            annotation_font=dict(size=10, color="rgba(255,255,255,0.65)"),
+        )
+
+    # -- Watch condition lines ------------------------------------------
+    _WATCH_STYLE: dict[str, tuple[str, str, str]] = {
+        "price_above": ("rgba(80, 200, 120, 0.85)", "▲", "top right"),
+        "price_below": ("rgba(230,  80,  80, 0.85)", "▼", "bottom right"),
+    }
+    if watch_levels and bars:
+        for w in watch_levels:
+            ctype = w.get("condition_type", "")
+            if ctype not in _WATCH_STYLE:
+                continue
+            value = w.get("value")
+            if value is None:
+                continue
+            colour, arrow, pos = _WATCH_STYLE[ctype]
+            fig.add_hline(
+                y=value,
+                line=dict(color=colour, width=1.5, dash="dash"),
+                annotation_text=f"{arrow} Watch  {value:,.2f}",
+                annotation_position=pos,
+                annotation_font=dict(size=10, color=colour),
             )
 
     # -- Layout ---------------------------------------------------------
