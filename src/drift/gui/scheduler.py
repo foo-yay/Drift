@@ -128,7 +128,7 @@ class BackgroundScheduler:
             self.state.next_run_utc = next_run
             time.sleep(self._interval)
 
-    def _run_cycle(self) -> None:
+    def _run_cycle(self, watch_trigger: bool = False) -> None:
         from drift.app import DriftApplication
         from drift.gui.state import _PROJECT_ROOT
         from drift.output import console as console_mod
@@ -153,7 +153,7 @@ class BackgroundScheduler:
                 "sandbox_sqlite_path":     str(root / config.storage.sandbox_sqlite_path),
             })
             abs_config = config.model_copy(update={"storage": abs_storage})
-            app = DriftApplication(abs_config, config_path=self._config_path)
+            app = DriftApplication(abs_config, config_path=self._config_path, watch_trigger=watch_trigger)
             outcome = app.run_once() or "unknown"
             self.state.record_run(outcome)
         except Exception as exc:  # noqa: BLE001
@@ -224,7 +224,7 @@ class BackgroundScheduler:
 
         if triggered_any and not self.state.running:
             self.state.record_watch_trigger()
-            self._run_cycle()
+            self._run_cycle(watch_trigger=True)
 
 
 # ---------------------------------------------------------------------------

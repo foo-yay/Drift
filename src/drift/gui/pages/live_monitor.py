@@ -146,7 +146,7 @@ def _live_price_widget(symbol: str) -> None:
     Uses ``fast_info.last_price`` which Yahoo updates every few seconds —
     much more current than the 15-min delayed bar history.
     """
-    @st.fragment(run_every=30)
+    @st.fragment(run_every=5)
     def _inner() -> None:
         from drift.data.providers.yfinance_provider import YFinanceProvider
         try:
