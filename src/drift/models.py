@@ -70,6 +70,7 @@ class MarketSnapshot(BaseModel):
     order_blocks: list[dict] = Field(default_factory=list)
     rejection_blocks: list[dict] = Field(default_factory=list)
     atr: float | None = None
+    volume_imbalance: float | None = None
     market_note: str | None = None
 
 

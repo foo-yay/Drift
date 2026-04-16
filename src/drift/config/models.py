@@ -82,6 +82,8 @@ class GatesSection(BaseModel):
     kill_switch_path: str
     news_gate_enabled: bool = True
     news_blackout_minutes: int = Field(default=30, ge=0)
+    volume_imbalance_gate_enabled: bool = True
+    volume_imbalance_threshold: float = Field(default=30.0, gt=0, le=100)
 
 
 class RiskSection(BaseModel):
