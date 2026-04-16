@@ -243,6 +243,24 @@ def _chart_fragment(
         except Exception:  # noqa: BLE001
             pass
 
+        # Active (unresolved) trade plan — show entry/stop/TP lines on chart.
+        # Only the most recent pending live signal is shown; clears when resolved.
+        active_trade_plan: dict | None = None
+        try:
+            pending = store.get_pending_live_signals(symbol)
+            if pending:
+                sig = pending[-1]  # most recent
+                active_trade_plan = {
+                    "bias":          sig.bias,
+                    "entry_min":     sig.entry_min,
+                    "entry_max":     sig.entry_max,
+                    "stop_loss":     sig.stop_loss,
+                    "take_profit_1": sig.take_profit_1,
+                    "take_profit_2": sig.take_profit_2,
+                }
+        except Exception:  # noqa: BLE001
+            pass
+
         fig = build_candlestick_chart(
             bars, signals, timeframe=tf, height=500,
             show_emas=show_emas,
@@ -251,6 +269,7 @@ def _chart_fragment(
             overlay_data=overlay_data,
             live_price=live_price,
             watch_levels=watch_levels or None,
+            active_trade_plan=active_trade_plan,
         )
 
         # Offer click-to-detail via plotly selected point → session state

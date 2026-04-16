@@ -74,6 +74,38 @@ def show_signal_detail(sig: SignalRow) -> None:
                 st.markdown("**Thesis**")
                 st.info(sig.thesis, icon="📝")
 
+            # ── Execution Plan ─────────────────────────────────────────────
+            st.markdown("**Execution Plan**")
+            llm_data    = sig.llm_decision or {}
+            hold_minutes = llm_data.get("hold_minutes") or 30
+            direction    = (sig.bias or "LONG").upper()
+            action       = "BUY" if direction == "LONG" else "SELL"
+            close_action = "SELL" if direction == "LONG" else "BUY"
+
+            rows = []
+            if sig.entry_min and sig.entry_max:
+                rows.append(("① Enter", f"{action} limit anywhere in **{sig.entry_min:,.2f} – {sig.entry_max:,.2f}**"))
+            if sig.stop_loss:
+                rows.append(("② Stop Loss", f"Immediately after fill → set stop at **{sig.stop_loss:,.2f}**"))
+            if sig.take_profit_1:
+                rows.append(("③ Take Profit", f"Set limit at **{sig.take_profit_1:,.2f}** → {close_action} to close"))
+            rows.append(("④ Time Limit", f"If nothing hits within **{hold_minutes} min** → {close_action} manually"))
+
+            for label, detail in rows:
+                c1, c2 = st.columns([0.28, 0.72])
+                c1.markdown(f"<span style='color:#aaa;font-size:0.85rem'>{label}</span>", unsafe_allow_html=True)
+                c2.markdown(f"<span style='font-size:0.9rem'>{detail}</span>", unsafe_allow_html=True)
+
+            if sig.take_profit_2:
+                st.caption(
+                    f"TP2 {sig.take_profit_2:,.2f} — extension target if momentum continues past TP1. "
+                    f"Per plan: close the full position at TP1 unless you scale out intentionally."
+                )
+
+            do_not = llm_data.get("do_not_trade_if")
+            if do_not:
+                st.warning(f"⚠ Do not trade if: {do_not}", icon=None)
+
         else:
             # NO_TRADE or BLOCKED — show LLM reasoning as readable prose
             llm = sig.llm_decision
