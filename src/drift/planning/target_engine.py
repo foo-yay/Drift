@@ -32,15 +32,15 @@ class TargetEngine:
             (tp1, tp2, reward_risk_ratio) — tp2 is None if the signal is weak.
         """
         if decision.decision == "LONG":
-            entry = decision.entry_zone[0]
-            stop_dist = entry - stop_loss
-            tp1 = round(entry + (stop_dist * self._cfg.atr_target_mult), 2)
-            tp2 = round(entry + (stop_dist * self._cfg.atr_target_mult * 1.5), 2)
+            entry_worst = decision.entry_zone[1]  # entry_max — worst-case fill for a LONG
+            stop_dist = entry_worst - stop_loss
+            tp1 = round(entry_worst + (stop_dist * self._cfg.atr_target_mult), 2)
+            tp2 = round(entry_worst + (stop_dist * self._cfg.atr_target_mult * 1.5), 2)
         else:  # SHORT
-            entry = decision.entry_zone[1]
-            stop_dist = stop_loss - entry
-            tp1 = round(entry - (stop_dist * self._cfg.atr_target_mult), 2)
-            tp2 = round(entry - (stop_dist * self._cfg.atr_target_mult * 1.5), 2)
+            entry_worst = decision.entry_zone[0]  # entry_min — worst-case fill for a SHORT
+            stop_dist = stop_loss - entry_worst
+            tp1 = round(entry_worst - (stop_dist * self._cfg.atr_target_mult), 2)
+            tp2 = round(entry_worst - (stop_dist * self._cfg.atr_target_mult * 1.5), 2)
 
         rr = round(stop_dist * self._cfg.atr_target_mult / stop_dist, 2) if stop_dist else 0.0
         # rr simplifies to atr_target_mult — keep explicit for auditability

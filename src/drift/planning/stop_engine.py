@@ -50,15 +50,29 @@ class StopEngine:
         self, snapshot: MarketSnapshot, decision: LLMDecision, atr: float
     ) -> float | None:
         entry_min = decision.entry_zone[0]
-
-        # Start with the ATR floor
         atr_floor = entry_min - (atr * self._cfg.atr_stop_floor_mult)
 
-        # If the LLM provided an invalidation hint referencing a price below
-        # entry, we treat entry_zone[0] - buffer as a structural reference.
-        # In the absence of structural swing data on the snapshot, we use the
-        # ATR floor directly.
-        stop = atr_floor - self._buffer
+        # Prefer LLM-identified structural invalidation price over ATR floor.
+        # Buffer it by structure_buffer_points so the stop sits just beyond
+        # the level rather than exactly on it.
+        inv = decision.invalidation_price
+        if inv is not None and inv < entry_min:
+            structural = inv - self._buffer
+            structural_dist = entry_min - structural
+            if structural_dist <= self._cfg.max_stop_points:
+                stop = structural
+                logger.info(
+                    "LONG stop: structural inv %.2f → stop %.2f (%.0f pts)",
+                    inv, stop, structural_dist,
+                )
+            else:
+                stop = atr_floor - self._buffer
+                logger.info(
+                    "LONG stop: structural inv %.2f too wide (%.0f pts > max %.0f), using ATR floor %.2f",
+                    inv, structural_dist, self._cfg.max_stop_points, stop,
+                )
+        else:
+            stop = atr_floor - self._buffer
 
         return self._validate_stop(entry_min, stop, direction="LONG")
 
@@ -67,7 +81,25 @@ class StopEngine:
     ) -> float | None:
         entry_max = decision.entry_zone[1]
         atr_floor = entry_max + (atr * self._cfg.atr_stop_floor_mult)
-        stop = atr_floor + self._buffer
+
+        inv = decision.invalidation_price
+        if inv is not None and inv > entry_max:
+            structural = inv + self._buffer
+            structural_dist = structural - entry_max
+            if structural_dist <= self._cfg.max_stop_points:
+                stop = structural
+                logger.info(
+                    "SHORT stop: structural inv %.2f → stop %.2f (%.0f pts)",
+                    inv, stop, structural_dist,
+                )
+            else:
+                stop = atr_floor + self._buffer
+                logger.info(
+                    "SHORT stop: structural inv %.2f too wide (%.0f pts > max %.0f), using ATR floor %.2f",
+                    inv, structural_dist, self._cfg.max_stop_points, stop,
+                )
+        else:
+            stop = atr_floor + self._buffer
 
         return self._validate_stop(entry_max, stop, direction="SHORT")
 
