@@ -1,13 +1,13 @@
 """Orders — trade approval, active position management, and order history.
 
 Sections:
-    1. **Pending Approvals** — trade plans awaiting operator action with
-       time/price validation and Approve / Reject buttons.
-    2. **Active Positions** — filled entries with TP1/TP2/Manual exit toggles,
-       Quick-Assess LLM button, and Manual Close.
-    3. **Order History** — all past orders with expandable detail.
+    1. **Active Positions** — filled entries with exit mode controls.
+    2. **Pending Approvals** — trade plans awaiting operator action.
+    3. **IB Status** — connectivity check.
+    4. **Order History** — all past orders with expandable detail.
 
-The page auto-refreshes every 10 seconds when orders or positions are active.
+Auto-refresh uses st.fragment(run_every=15) so only the live sections
+rerun — no full-page reload or scroll-position reset.
 """
 from __future__ import annotations
 
@@ -19,6 +19,44 @@ import streamlit as st
 from drift.gui.state import get_config, _PROJECT_ROOT
 
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Auto-refreshing live sections (fragment = WebSocket rerun, no page reload)
+# ---------------------------------------------------------------------------
+
+@st.fragment(run_every=15)
+def _positions_section(config, db_path: str) -> None:
+    """Active positions — reruns every 15 s to update P&L without a page reload."""
+    from drift.storage.position_store import PositionStore
+
+    store = PositionStore(db_path)
+    open_positions = store.get_open()
+    store.close()
+    if not open_positions:
+        return
+    st.subheader("📊 Active Positions")
+    for pos in open_positions:
+        _render_active_position(config, pos)
+    st.divider()
+
+
+@st.fragment(run_every=15)
+def _pending_section(config, db_path: str) -> None:
+    """Pending approvals — reruns every 15 s so expiry is checked live."""
+    from drift.storage.pending_order_store import PendingOrderStore
+
+    store = PendingOrderStore(db_path)
+    store.expire_stale(config.broker.approval_expiry_minutes)
+    pending = store.get_pending()
+    store.close()
+    if not pending:
+        return
+    st.subheader("⏳ Pending Approvals")
+    st.caption(f"{len(pending)} trade plan(s) awaiting approval")
+    for order in pending:
+        _render_pending_card(config, order)
+    st.divider()
+
 
 _STATE_BADGE = {
     "PENDING":        ("⏳", "orange"),
@@ -176,48 +214,17 @@ def page() -> None:
         )
         return
 
-    # Load stores
-    from drift.storage.pending_order_store import PendingOrderStore
-    from drift.storage.position_store import PositionStore
-
     db_path = str(_PROJECT_ROOT / config.storage.sqlite_path)
-    pending_store = PendingOrderStore(db_path)
-    position_store = PositionStore(db_path)
-
-    # Expire stale pending orders
-    expired = pending_store.expire_stale(config.broker.approval_expiry_minutes)
-    if expired:
-        st.toast(f"{expired} pending order(s) expired")
-
-    pending = pending_store.get_pending()
-    open_positions = position_store.get_open()
-    needs_refresh = bool(pending) or bool(open_positions)
-
-    # Auto-refresh
-    if needs_refresh:
-        st.markdown(
-            '<meta http-equiv="refresh" content="10">',
-            unsafe_allow_html=True,
-        )
 
     # ==================================================================
-    # Section 1: Active Positions
+    # Section 1: Active Positions  (fragment — no full-page reload)
     # ==================================================================
-    if open_positions:
-        st.subheader("📊 Active Positions")
-        for pos in open_positions:
-            _render_active_position(config, pos)
-        st.divider()
+    _positions_section(config, db_path)
 
     # ==================================================================
-    # Section 2: Pending Approvals
+    # Section 2: Pending Approvals  (fragment — no full-page reload)
     # ==================================================================
-    if pending:
-        st.subheader("⏳ Pending Approvals")
-        st.caption(f"{len(pending)} trade plan(s) awaiting approval")
-        for order in pending:
-            _render_pending_card(config, order)
-        st.divider()
+    _pending_section(config, db_path)
 
     # ==================================================================
     # Section 3: IB Status
@@ -238,8 +245,13 @@ def page() -> None:
     # ==================================================================
     st.subheader("📋 Order & Position History")
 
-    all_orders = pending_store.get_all(limit=50)
-    all_positions = position_store.get_all(limit=50)
+    from drift.storage.pending_order_store import PendingOrderStore
+    from drift.storage.position_store import PositionStore
+
+    hist_pending = PendingOrderStore(db_path)
+    hist_positions = PositionStore(db_path)
+    all_orders = hist_pending.get_all(limit=50)
+    all_positions = hist_positions.get_all(limit=50)
 
     tab_orders, tab_positions = st.tabs(["Orders", "Positions"])
 
@@ -257,8 +269,8 @@ def page() -> None:
             for pos in all_positions:
                 _render_position_history_row(pos)
 
-    pending_store.close()
-    position_store.close()
+    hist_pending.close()
+    hist_positions.close()
 
 
 # ------------------------------------------------------------------
@@ -266,10 +278,9 @@ def page() -> None:
 # ------------------------------------------------------------------
 
 def _render_pending_card(config, order) -> None:
-    """Render a pending approval card with validation warnings."""
+    """Render a compact pending approval row."""
     bias_emoji = _BIAS_EMOJI.get(order.bias, "")
 
-    # Pre-compute validation warnings
     time_warning = ""
     if order.generated_at:
         try:
@@ -278,46 +289,30 @@ def _render_pending_card(config, order) -> None:
                 gen = gen.replace(tzinfo=timezone.utc)
             elapsed = (datetime.now(tz=timezone.utc) - gen).total_seconds() / 60
             if elapsed > order.max_hold_minutes:
-                time_warning = f"⚠️ EXPIRED — {elapsed:.0f}m old (max {order.max_hold_minutes}m)"
+                time_warning = " ⚠️ expired"
             elif elapsed > order.max_hold_minutes * 0.7:
-                time_warning = f"⏰ {order.max_hold_minutes - elapsed:.0f}m remaining"
+                time_warning = f" ⏰ {order.max_hold_minutes - elapsed:.0f}m left"
         except (ValueError, TypeError):
             pass
 
+    tp2_str = f"{order.take_profit_2:.2f}" if order.take_profit_2 else "—"
+    entry_str = f"{order.entry_min:.2f}–{order.entry_max:.2f}"
+
     with st.container(border=True):
-        col_title, col_age = st.columns([4, 1])
-        col_title.markdown(
-            f"### {bias_emoji} {order.bias} {order.symbol}  "
-            f"`{order.setup_type}`  conf={order.confidence}%"
+        c0, c1, c2 = st.columns([3, 5, 2])
+        c0.markdown(
+            f"{bias_emoji} **{order.bias} {order.symbol}** · `{order.setup_type}` · {order.confidence}%"
+            + time_warning
         )
-        col_age.caption(_age_label(order.created_at))
-
-        if time_warning:
-            st.warning(time_warning)
-
-        st.caption(order.thesis)
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Entry", f"{order.entry_min:.2f} – {order.entry_max:.2f}")
-        c2.metric("Stop Loss", f"{order.stop_loss:.2f}")
-        c3.metric("TP1", f"{order.take_profit_1:.2f}")
-        c4.metric(
-            "TP2",
-            f"{order.take_profit_2:.2f}" if order.take_profit_2 else "—",
+        c1.markdown(
+            f"Entry **{entry_str}** · SL **{order.stop_loss:.2f}** · "
+            f"TP1 **{order.take_profit_1:.2f}** · TP2 **{tp2_str}**"
         )
+        c2.markdown(f"*{_age_label(order.created_at)}* · hold {order.max_hold_minutes}m")
 
-        st.caption(
-            f"Entry limit: **{'entry_max' if order.bias == 'LONG' else 'entry_min'}** "
-            f"({order.entry_max if order.bias == 'LONG' else order.entry_min:.2f})"
-            f"  |  1 MNQ  |  Hold: {order.max_hold_minutes}m  |  Bracket (entry + TP1 + SL)"
-        )
-
-        col_approve, col_reject, _ = st.columns([1, 1, 4])
-        if col_approve.button(
-            "✅ Approve & Place", key=f"approve_{order.id}", type="primary"
-        ):
+        col_approve, col_reject, _ = st.columns([1, 1, 6])
+        if col_approve.button("✅ Approve", key=f"approve_{order.id}", type="primary"):
             _submit_order(config, order)
-
         if col_reject.button("❌ Reject", key=f"reject_{order.id}"):
             from drift.storage.pending_order_store import PendingOrderStore
             s = PendingOrderStore(str(_PROJECT_ROOT / config.storage.sqlite_path))
@@ -327,80 +322,77 @@ def _render_pending_card(config, order) -> None:
 
 
 def _render_active_position(config, pos) -> None:
-    """Render an active position card with exit mode controls."""
+    """Render a compact active position row with exit controls."""
     bias_emoji = _BIAS_EMOJI.get(pos.bias, "")
+    state_label = "⏳ pending" if pos.state == "WORKING" else "📊 filled"
     mode_label = _MODE_LABEL.get(pos.exit_mode, pos.exit_mode)
+    entry_str = f"{pos.entry_fill:.2f}" if pos.entry_fill else f"lim {pos.entry_limit:.2f}"
+    tp2_str = f"{pos.take_profit_2:.2f}" if pos.take_profit_2 else "—"
+
+    # P&L
+    pnl_str = ""
+    if pos.entry_fill:
+        try:
+            from drift.data.providers.yfinance_provider import YFinanceProvider
+            current = YFinanceProvider().get_latest_quote(pos.symbol)
+            pts = (current - pos.entry_fill) if pos.bias == "LONG" else (pos.entry_fill - current)
+            usd = pts * 0.50 * pos.quantity
+            color = "green" if pts >= 0 else "red"
+            pnl_str = f":{color}[{pts:+.2f} pts (${usd:+.2f})]"
+        except Exception:  # noqa: BLE001
+            pnl_str = "P&L —"
+
+    # Time remaining
+    time_str = ""
+    if pos.fill_time and pos.max_hold_minutes:
+        try:
+            fill_dt = datetime.fromisoformat(pos.fill_time)
+            if fill_dt.tzinfo is None:
+                fill_dt = fill_dt.replace(tzinfo=timezone.utc)
+            remaining = pos.max_hold_minutes - (datetime.now(tz=timezone.utc) - fill_dt).total_seconds() / 60
+            time_str = f" · {remaining:.0f}m left" if remaining > 0 else " · ⚠️ expired"
+        except (ValueError, TypeError):
+            pass
 
     with st.container(border=True):
-        # Title row
-        state_label = "⏳ Entry pending" if pos.state == "WORKING" else "📊 FILLED"
-        st.markdown(
-            f"### {bias_emoji} {pos.bias} {pos.symbol}  —  {state_label}  |  {mode_label}"
+        # Single info row
+        c0, c1, c2 = st.columns([3, 5, 3])
+        c0.markdown(f"{bias_emoji} **{pos.bias} {pos.symbol}** · {state_label} · {mode_label}{time_str}")
+        c1.markdown(
+            f"fill **{entry_str}** · SL **{pos.stop_loss:.2f}** · "
+            f"TP1 **{pos.take_profit_1:.2f}** · TP2 **{tp2_str}**"
         )
+        if pnl_str:
+            c2.markdown(pnl_str)
 
-        # Metrics row
-        c1, c2, c3, c4, c5 = st.columns(5)
-        if pos.entry_fill:
-            c1.metric("Entry Fill", f"{pos.entry_fill:.2f}")
-        else:
-            c1.metric("Entry Limit", f"{pos.entry_limit:.2f}")
-        c2.metric("Stop Loss", f"{pos.stop_loss:.2f}")
-        c3.metric("TP1", f"{pos.take_profit_1:.2f}")
-        c4.metric("TP2", f"{pos.take_profit_2:.2f}" if pos.take_profit_2 else "—")
-
-        # P&L (for FILLED)
-        if pos.entry_fill:
-            try:
-                from drift.data.providers.yfinance_provider import YFinanceProvider
-                current = YFinanceProvider().get_latest_quote(pos.symbol)
-                pts = (current - pos.entry_fill) if pos.bias == "LONG" else (pos.entry_fill - current)
-                usd = pts * 0.50 * pos.quantity
-                c5.metric("P&L", f"{pts:+.2f} pts", f"${usd:+.2f}")
-            except Exception:  # noqa: BLE001
-                c5.metric("P&L", "—")
-
-        # Time info
-        if pos.fill_time:
-            try:
-                fill_dt = datetime.fromisoformat(pos.fill_time)
-                if fill_dt.tzinfo is None:
-                    fill_dt = fill_dt.replace(tzinfo=timezone.utc)
-                elapsed = (datetime.now(tz=timezone.utc) - fill_dt).total_seconds() / 60
-                remaining = pos.max_hold_minutes - elapsed
-                if remaining > 0:
-                    st.caption(f"Filled {_age_label(pos.fill_time)}  •  {remaining:.0f}m remaining in hold window")
-                else:
-                    st.caption(f"Filled {_age_label(pos.fill_time)}  •  ⚠️ Hold window expired ({abs(remaining):.0f}m ago)")
-            except (ValueError, TypeError):
-                pass
-
-        st.caption(pos.thesis)
-
-        # Action buttons (only for FILLED)
+        # Button strip
         if pos.state == "FILLED":
-            cols = st.columns([1, 1, 1, 1, 1, 3])
-
+            btn = st.columns([1, 1, 1, 1, 1, 5])
+            col = 0
             if pos.exit_mode != "TP1" and pos.take_profit_1:
-                if cols[0].button("🎯 TP1", key=f"ord_tp1_{pos.id}"):
+                if btn[col].button("→ TP1", key=f"ord_tp1_{pos.id}",
+                                   help=f"Switch exit to TP1 @ {pos.take_profit_1:.2f}"):
                     _switch_exit_mode(config, pos.id, "TP1")
-
+                col += 1
             if pos.exit_mode != "TP2" and pos.take_profit_2:
-                if cols[1].button("🎯🎯 TP2", key=f"ord_tp2_{pos.id}"):
+                if btn[col].button("→ TP2", key=f"ord_tp2_{pos.id}",
+                                   help=f"Switch exit to TP2 @ {pos.take_profit_2:.2f}"):
                     _switch_exit_mode(config, pos.id, "TP2")
-
+                col += 1
             if pos.exit_mode != "MANUAL":
-                if cols[2].button("✋ Hold", key=f"ord_hold_{pos.id}"):
+                if btn[col].button("✋ Hold", key=f"ord_hold_{pos.id}",
+                                   help="Cancel auto-exit, hold until manually closed"):
                     _switch_exit_mode(config, pos.id, "MANUAL")
-
-            if cols[3].button("🚪 Close", key=f"ord_close_{pos.id}", type="primary"):
+                col += 1
+            if btn[col].button("✕ Close", key=f"ord_close_{pos.id}", type="primary",
+                               help="Submit market order to close immediately"):
                 _manual_close(config, pos.id)
-
-            if cols[4].button("🧠 Assess", key=f"ord_assess_{pos.id}"):
+            col += 1
+            if btn[col].button("🧠 Assess", key=f"ord_assess_{pos.id}"):
                 _quick_assess(config, pos)
-
         elif pos.state == "WORKING":
             if st.button("🚫 Cancel Order", key=f"ord_cancel_{pos.id}"):
-                _manual_close(config, pos.id)  # cancel_bracket for WORKING
+                _manual_close(config, pos.id)
 
 
 def _render_order_history_row(order) -> None:
