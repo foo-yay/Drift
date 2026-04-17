@@ -38,8 +38,10 @@ def _time_display(pos) -> str:
             fill_dt = fill_dt.replace(tzinfo=timezone.utc)
         elapsed_min = (datetime.now(tz=timezone.utc) - fill_dt).total_seconds() / 60
         remaining = pos.max_hold_minutes - elapsed_min
-        if remaining > 0:
+        if remaining >= 0.5:
             return f"⏱ {remaining:.0f}m"
+        if remaining > -0.5:
+            return "⏱ 0m"
         over = abs(remaining)
         if pos.exit_mode == "MANUAL":
             return f"✋ +{over:.0f}m past window"
@@ -188,18 +190,18 @@ def _render_position_card(config, pos) -> None:
             if time_md else ""
         )
         c0.markdown(
-            f"<div style='line-height:1.2'>{state_str} {bias_emoji} **{pos.bias} {pos.symbol}**<br>"
+            f"<div style='line-height:1.2'>{state_str} {bias_emoji} <strong>{pos.bias} {pos.symbol}</strong><br>"
             f"<small style='color:#aaa'>{mode_badge}</small>{time_part}</div>",
             unsafe_allow_html=True,
         )
         c1.markdown(
-            f"<div style='line-height:1.2'><small style='color:#aaa'>Entry</small> **{entry_str}**<br>"
-            f"<small style='color:#e05252'>SL</small> **{pos.stop_loss:.2f}**</div>",
+            f"<div style='line-height:1.2'><small style='color:#aaa'>Entry</small> <strong>{entry_str}</strong><br>"
+            f"<small style='color:#e05252'>SL</small> <strong>{pos.stop_loss:.2f}</strong></div>",
             unsafe_allow_html=True,
         )
         c2.markdown(
-            f"<div style='line-height:1.2'><small style='color:#52b788'>TP1</small> **{pos.take_profit_1:.2f}**<br>"
-            f"<small style='color:#52b788'>TP2</small> **{tp2_str}**</div>",
+            f"<div style='line-height:1.2'><small style='color:#52b788'>TP1</small> <strong>{pos.take_profit_1:.2f}</strong><br>"
+            f"<small style='color:#52b788'>TP2</small> <strong>{tp2_str}</strong></div>",
             unsafe_allow_html=True,
         )
         c3.markdown(

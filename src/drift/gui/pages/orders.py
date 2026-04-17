@@ -363,8 +363,10 @@ def _render_active_position(config, pos) -> None:
             if fill_dt.tzinfo is None:
                 fill_dt = fill_dt.replace(tzinfo=timezone.utc)
             remaining = pos.max_hold_minutes - (datetime.now(tz=timezone.utc) - fill_dt).total_seconds() / 60
-            if remaining > 0:
+            if remaining >= 0.5:
                 time_str = f"⏱ {remaining:.0f}m"
+            elif remaining > -0.5:
+                time_str = "⏱ 0m"
             elif pos.exit_mode == "MANUAL":
                 time_str = f"✋ +{abs(remaining):.0f}m past window"
             elif pos.exit_mode == "HOLD_EXPIRY":
@@ -411,19 +413,19 @@ def _render_active_position(config, pos) -> None:
             if time_str else ""
         )
         c0.markdown(
-            f"<div style='line-height:1.2'>{bias_emoji} **{pos.bias} {pos.symbol}**<br>"
+            f"<div style='line-height:1.2'>{bias_emoji} <strong>{pos.bias} {pos.symbol}</strong><br>"
             f"<small style='color:#aaa'>{state_label} · {mode_label}</small>{time_part}</div>",
             unsafe_allow_html=True,
         )
 
         c1.markdown(
-            f"<div style='line-height:1.2'><small style='color:#aaa'>Entry</small> **{entry_str}**<br>"
-            f"<small style='color:#e05252'>SL</small> **{pos.stop_loss:.2f}**</div>",
+            f"<div style='line-height:1.2'><small style='color:#aaa'>Entry</small> <strong>{entry_str}</strong><br>"
+            f"<small style='color:#e05252'>SL</small> <strong>{pos.stop_loss:.2f}</strong></div>",
             unsafe_allow_html=True,
         )
         c2.markdown(
-            f"<div style='line-height:1.2'><small style='color:#52b788'>TP1</small> **{pos.take_profit_1:.2f}**<br>"
-            f"<small style='color:#52b788'>TP2</small> **{tp2_str}**</div>",
+            f"<div style='line-height:1.2'><small style='color:#52b788'>TP1</small> <strong>{pos.take_profit_1:.2f}</strong><br>"
+            f"<small style='color:#52b788'>TP2</small> <strong>{tp2_str}</strong></div>",
             unsafe_allow_html=True,
         )
         c3.markdown(
