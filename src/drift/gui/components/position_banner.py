@@ -144,8 +144,25 @@ def _render_position_card(config, pos) -> None:
 
     time_md = _time_display(pos)
 
+    # Determine buttons before column layout so widths are correct
+    if pos.state == "FILLED":
+        btn_labels: list[str] = []
+        if pos.exit_mode != "TP1" and pos.take_profit_1:
+            btn_labels.append("tp1")
+        if pos.exit_mode != "TP2" and pos.take_profit_2:
+            btn_labels.append("tp2")
+        if pos.exit_mode != "MANUAL":
+            btn_labels.append("hold")
+        btn_labels += ["close", "assess"]
+    else:
+        btn_labels = ["cancel"]
+
+    col_widths = [2, 3, 1.5] + [1.1] * len(btn_labels)
+
     with st.container(border=True):
-        c0, c1, c2 = st.columns([2, 3, 2.5], vertical_alignment="top")
+        cols = st.columns(col_widths, vertical_alignment="top")
+        c0, c1, c2 = cols[0], cols[1], cols[2]
+        btn_cols = cols[3:]
 
         # Col 0: direction on line 1, mode badge on line 2
         c0.markdown(
@@ -172,19 +189,9 @@ def _render_position_card(config, pos) -> None:
         if info_parts:
             c2.markdown("  \n".join(info_parts), unsafe_allow_html=True)
 
-        # Button strip
+        # Buttons — inline right side, top-aligned
+        i = 0
         if pos.state == "FILLED":
-            btn_labels: list[str] = []
-            if pos.exit_mode != "TP1" and pos.take_profit_1:
-                btn_labels.append("tp1")
-            if pos.exit_mode != "TP2" and pos.take_profit_2:
-                btn_labels.append("tp2")
-            if pos.exit_mode != "MANUAL":
-                btn_labels.append("hold")
-            btn_labels += ["close", "assess"]
-            spacer = max(1, 9 - len(btn_labels))
-            btn_cols = st.columns([1] * len(btn_labels) + [spacer])
-            i = 0
             if "tp1" in btn_labels:
                 if btn_cols[i].button("→TP1", key=f"bn_tp1_{pos.id}",
                                       help=f"Switch exit to TP1 @ {pos.take_profit_1:.2f}"):
@@ -207,8 +214,8 @@ def _render_position_card(config, pos) -> None:
             if btn_cols[i].button("🧠 Assess", key=f"bn_assess_{pos.id}"):
                 _assess_position(config, pos)
         else:
-            if st.button("🚫 Cancel", key=f"bn_cancel_{pos.id}",
-                         help="Cancel working entry order"):
+            if btn_cols[0].button("🚫 Cancel", key=f"bn_cancel_{pos.id}",
+                                  help="Cancel working entry order"):
                 _manual_close(config, pos.id)
 
 

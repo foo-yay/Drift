@@ -364,9 +364,28 @@ def _render_active_position(config, pos) -> None:
         except (ValueError, TypeError):
             pass
 
+    # Determine buttons before column layout so widths are correct
+    if pos.state == "FILLED":
+        btn_labels: list[str] = []
+        if pos.exit_mode != "TP1" and pos.take_profit_1:
+            btn_labels.append("tp1")
+        if pos.exit_mode != "TP2" and pos.take_profit_2:
+            btn_labels.append("tp2")
+        if pos.exit_mode != "MANUAL":
+            btn_labels.append("hold")
+        btn_labels += ["close", "assess"]
+    elif pos.state == "WORKING":
+        btn_labels = ["cancel"]
+    else:
+        btn_labels = []
+
+    col_widths = [2, 3.5, 1.5] + [1.1] * len(btn_labels)
+
     with st.container(border=True):
-        # Info row: identity | price ladder (2-row) | P&L + time
-        c0, c1, c2 = st.columns([2.5, 4, 2.5], vertical_alignment="top")
+        cols = st.columns(col_widths, vertical_alignment="top")
+        c0, c1, c2 = cols[0], cols[1], cols[2]
+        btn_cols = cols[3:]
+
         c0.markdown(
             f"{bias_emoji} **{pos.bias} {pos.symbol}**  \n"
             f"<small style='color:#aaa'>{state_label} · {mode_label}</small>",
@@ -387,33 +406,32 @@ def _render_active_position(config, pos) -> None:
         if right_parts:
             c2.markdown("  \n".join(right_parts), unsafe_allow_html=True)
 
-        # Button strip
+        # Buttons — inline right side, top-aligned
+        i = 0
         if pos.state == "FILLED":
-            btn = st.columns([1, 1, 1, 1, 1, 5])
-            col = 0
-            if pos.exit_mode != "TP1" and pos.take_profit_1:
-                if btn[col].button("→TP1", key=f"ord_tp1_{pos.id}",
-                                   help=f"Switch exit to TP1 @ {pos.take_profit_1:.2f}"):
+            if "tp1" in btn_labels:
+                if btn_cols[i].button("→TP1", key=f"ord_tp1_{pos.id}",
+                                      help=f"Switch exit to TP1 @ {pos.take_profit_1:.2f}"):
                     _switch_exit_mode(config, pos.id, "TP1")
-                col += 1
-            if pos.exit_mode != "TP2" and pos.take_profit_2:
-                if btn[col].button("→TP2", key=f"ord_tp2_{pos.id}",
-                                   help=f"Switch exit to TP2 @ {pos.take_profit_2:.2f}"):
+                i += 1
+            if "tp2" in btn_labels:
+                if btn_cols[i].button("→TP2", key=f"ord_tp2_{pos.id}",
+                                      help=f"Switch exit to TP2 @ {pos.take_profit_2:.2f}"):
                     _switch_exit_mode(config, pos.id, "TP2")
-                col += 1
-            if pos.exit_mode != "MANUAL":
-                if btn[col].button("✋ Hold", key=f"ord_hold_{pos.id}",
-                                   help="Hold manually — disarms auto-exit. Position stays open past time window until you close it or SL/TP triggers."):
+                i += 1
+            if "hold" in btn_labels:
+                if btn_cols[i].button("✋ Hold", key=f"ord_hold_{pos.id}",
+                                      help="Hold manually — disarms auto-exit. Position stays open past time window until you close it or SL/TP triggers."):
                     _switch_exit_mode(config, pos.id, "MANUAL")
-                col += 1
-            if btn[col].button("✕ Close", key=f"ord_close_{pos.id}",
-                               help="Submit market order to close immediately"):
+                i += 1
+            if btn_cols[i].button("✕ Close", key=f"ord_close_{pos.id}",
+                                  help="Submit market order to close immediately"):
                 _manual_close(config, pos.id)
-            col += 1
-            if btn[col].button("🧠 Assess", key=f"ord_assess_{pos.id}"):
+            i += 1
+            if btn_cols[i].button("🧠 Assess", key=f"ord_assess_{pos.id}"):
                 _quick_assess(config, pos)
-        elif pos.state == "WORKING":
-            if st.button("🚫 Cancel Order", key=f"ord_cancel_{pos.id}"):
+        elif pos.state == "WORKING" and btn_cols:
+            if btn_cols[0].button("🚫 Cancel Order", key=f"ord_cancel_{pos.id}"):
                 _manual_close(config, pos.id)
 
 
