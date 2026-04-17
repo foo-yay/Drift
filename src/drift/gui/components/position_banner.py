@@ -167,7 +167,9 @@ def _render_position_card(config, pos) -> None:
     # CSS: tighten gap between button columns to ~5 px
     _BTN_CSS = (
         "<style>[data-testid='stHorizontalBlock']"
-        "{gap:5px!important;}</style>"
+        "{gap:5px!important;}"
+        "[data-testid='stButton']>button,[data-testid='stPopover']>button"
+        "{white-space:nowrap!important;}</style>"
     )
 
     col_widths = [2, 3, 2] + [1.0] * len(btn_labels)

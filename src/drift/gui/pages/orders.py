@@ -389,7 +389,9 @@ def _render_active_position(config, pos) -> None:
 
     _BTN_CSS = (
         "<style>[data-testid='stHorizontalBlock']"
-        "{gap:5px!important;}</style>"
+        "{gap:5px!important;}"
+        "[data-testid='stButton']>button,[data-testid='stPopover']>button"
+        "{white-space:nowrap!important;}</style>"
     )
 
     col_widths = [2, 3.5, 2] + [1.0] * len(btn_labels)
