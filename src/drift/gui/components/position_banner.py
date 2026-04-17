@@ -19,11 +19,6 @@ from drift.gui.state import get_config, _PROJECT_ROOT
 log = logging.getLogger(__name__)
 
 _BIAS_EMOJI = {"LONG": "🟢", "SHORT": "🔴"}
-_MODE_BADGE = {
-    "TP1":    "🎯 TP1",
-    "TP2":    "🎯🎯 TP2",
-    "MANUAL": "✋ hold",
-}
 
 # Align text rows with button rows inside st.columns
 _VALIGN_CSS = """
@@ -31,6 +26,32 @@ _VALIGN_CSS = """
 [data-testid="stHorizontalBlock"] { align-items: center !important; }
 </style>
 """
+
+
+def _time_display(pos) -> str:
+    """Return a time string for the hold window.
+
+    MANUAL mode: show how far past (or short of) the window we are.
+    TP1/TP2 mode: show time remaining (auto-exit is still armed).
+    Never implies auto-close on expiry — that doesn't happen.
+    """
+    if not (pos.fill_time and pos.max_hold_minutes):
+        return ""
+    try:
+        fill_dt = datetime.fromisoformat(pos.fill_time)
+        if fill_dt.tzinfo is None:
+            fill_dt = fill_dt.replace(tzinfo=timezone.utc)
+        elapsed_min = (datetime.now(tz=timezone.utc) - fill_dt).total_seconds() / 60
+        remaining = pos.max_hold_minutes - elapsed_min
+        if remaining > 0:
+            return f"⏱ {remaining:.0f}m"
+        # Past window
+        over = abs(remaining)
+        if pos.exit_mode == "MANUAL":
+            return f"✋ +{over:.0f}m past window"
+        return f"⚠️ +{over:.0f}m past window"
+    except (ValueError, TypeError):
+        return ""
 
 
 @st.fragment(run_every=30)
@@ -58,11 +79,22 @@ def render_position_banner() -> None:
 
 
 def _render_row(config, pos) -> None:
-    """One compact row per position: info cols + action buttons."""
+    """One compact row: identity | price ladder | P&L + time | action buttons."""
     bias_emoji = _BIAS_EMOJI.get(pos.bias, "")
-    mode_badge = _MODE_BADGE.get(pos.exit_mode, pos.exit_mode)
-    entry_str = f"{pos.entry_fill:.2f}" if pos.entry_fill else f"lim {pos.entry_limit:.2f}"
     state_str = "⏳" if pos.state == "WORKING" else "📊"
+    entry_str = f"{pos.entry_fill:.2f}" if pos.entry_fill else f"lim {pos.entry_limit:.2f}"
+
+    # Exit mode badge — makes it clear what the current auto-exit target is
+    mode_badge = {"TP1": "🎯 TP1", "TP2": "🎯🎯 TP2", "MANUAL": "✋ manual"}.get(pos.exit_mode, pos.exit_mode)
+
+    # Price ladder: Entry · SL · TP1 · TP2
+    tp2_str = f"{pos.take_profit_2:.2f}" if pos.take_profit_2 else "—"
+    ladder_md = (
+        f"<small style='color:#aaa'>Entry</small> **{entry_str}** &nbsp;"
+        f"<small style='color:#e05252'>SL</small> **{pos.stop_loss:.2f}** &nbsp;"
+        f"<small style='color:#52b788'>TP1</small> **{pos.take_profit_1:.2f}** &nbsp;"
+        f"<small style='color:#52b788'>TP2</small> **{tp2_str}**"
+    )
 
     # P&L
     pnl_md = ""
@@ -77,35 +109,34 @@ def _render_row(config, pos) -> None:
         except Exception:  # noqa: BLE001
             pnl_md = "P&L —"
 
-    # Time remaining
-    time_md = ""
-    if pos.fill_time and pos.max_hold_minutes:
-        try:
-            fill_dt = datetime.fromisoformat(pos.fill_time)
-            if fill_dt.tzinfo is None:
-                fill_dt = fill_dt.replace(tzinfo=timezone.utc)
-            remaining = pos.max_hold_minutes - (datetime.now(tz=timezone.utc) - fill_dt).total_seconds() / 60
-            time_md = f"⏱ {remaining:.0f}m" if remaining > 0 else "⚠️"
-        except (ValueError, TypeError):
-            pass
+    time_md = _time_display(pos)
 
-    # Count how many buttons (to size columns correctly)
+    # Button count drives column sizing
     n_btns = sum([
         pos.state == "FILLED" and pos.exit_mode != "TP1" and bool(pos.take_profit_1),
         pos.state == "FILLED" and pos.exit_mode != "TP2" and bool(pos.take_profit_2),
         pos.state == "FILLED" and pos.exit_mode != "MANUAL",
-        True,  # close / cancel always present
+        True,  # close/cancel always present
     ])
 
-    # Layout: identity | entry+mode+time | pnl | [buttons]
-    btn_width = [1] * n_btns
-    cols = st.columns([2.5, 2.5, 2] + btn_width)
+    cols = st.columns([2, 3.5, 2, 1.5] + [0.8] * n_btns)
+
+    # Col 0: identity
     cols[0].markdown(f"{state_str} {bias_emoji} **{pos.bias} {pos.symbol}** · {mode_badge}")
-    cols[1].markdown(f"entry **{entry_str}**{'  ' + time_md if time_md else ''}")
+
+    # Col 1: price ladder
+    cols[1].markdown(ladder_md, unsafe_allow_html=True)
+
+    # Col 2: P&L
     if pnl_md:
         cols[2].markdown(pnl_md)
 
-    btn_col = 3
+    # Col 3: time
+    if time_md:
+        cols[3].markdown(f"<small>{time_md}</small>", unsafe_allow_html=True)
+
+    # Buttons
+    btn_col = 4
     if pos.state == "FILLED":
         if pos.exit_mode != "TP1" and pos.take_profit_1:
             if cols[btn_col].button("→TP1", key=f"bn_tp1_{pos.id}",
@@ -119,15 +150,15 @@ def _render_row(config, pos) -> None:
             btn_col += 1
         if pos.exit_mode != "MANUAL":
             if cols[btn_col].button("✋", key=f"bn_hold_{pos.id}",
-                                    help="Hold — cancel auto-exit"):
+                                    help="Hold manually — disarms auto-exit. Position stays open past time window until you close it or SL/TP triggers."):
                 _switch_mode(config, pos.id, "MANUAL")
             btn_col += 1
         if cols[btn_col].button("✕", key=f"bn_close_{pos.id}", type="primary",
-                                help="Close position at market"):
+                                help="Submit market order to close now"):
             _manual_close(config, pos.id)
     else:
         if cols[btn_col].button("✕", key=f"bn_cancel_{pos.id}", type="primary",
-                                help="Cancel working order"):
+                                help="Cancel working entry order"):
             _manual_close(config, pos.id)
 
     st.divider()

@@ -55,12 +55,38 @@ _pages = [
 ]
 
 # ---------------------------------------------------------------------------
-# Sidebar header
+# Sidebar header + live price ticker
 # ---------------------------------------------------------------------------
+
+@st.fragment(run_every=5)
+def _sidebar_price() -> None:
+    from zoneinfo import ZoneInfo
+    from datetime import datetime
+    from drift.gui.state import get_config
+    from drift.data.providers.yfinance_provider import YFinanceProvider
+
+    config = get_config()
+    symbol = config.instrument.symbol
+    _ET = ZoneInfo("America/New_York")
+    try:
+        price = YFinanceProvider().get_latest_quote(symbol)
+        now_et = datetime.now(tz=_ET)
+        st.markdown(
+            f"<div style='margin:4px 0 2px 0;line-height:1.1'>"
+            f"<span style='font-size:1.6rem;font-weight:700;color:#f5f5f5'>"
+            f"{price:,.2f}</span>"
+            f"<span style='color:#777;font-size:0.75rem;margin-left:8px'>"
+            f"MNQ · {now_et.strftime('%H:%M:%S')} ET</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    except Exception:  # noqa: BLE001
+        st.caption("Price unavailable")
+
 
 with st.sidebar:
     st.markdown("## 📈 Drift")
-    st.caption("Local MNQ signal engine")
+    _sidebar_price()
     st.divider()
 
 nav = st.navigation(_pages, position="sidebar")

@@ -342,7 +342,7 @@ def _render_active_position(config, pos) -> None:
         except Exception:  # noqa: BLE001
             pnl_str = "P&L —"
 
-    # Time remaining
+    # Time display (reuse same logic as banner)
     time_str = ""
     if pos.fill_time and pos.max_hold_minutes:
         try:
@@ -350,38 +350,49 @@ def _render_active_position(config, pos) -> None:
             if fill_dt.tzinfo is None:
                 fill_dt = fill_dt.replace(tzinfo=timezone.utc)
             remaining = pos.max_hold_minutes - (datetime.now(tz=timezone.utc) - fill_dt).total_seconds() / 60
-            time_str = f" · {remaining:.0f}m left" if remaining > 0 else " · ⚠️ expired"
+            if remaining > 0:
+                time_str = f"⏱ {remaining:.0f}m"
+            elif pos.exit_mode == "MANUAL":
+                time_str = f"✋ +{abs(remaining):.0f}m past window"
+            else:
+                time_str = f"⚠️ +{abs(remaining):.0f}m past window"
         except (ValueError, TypeError):
             pass
 
     with st.container(border=True):
-        # Single info row
-        c0, c1, c2 = st.columns([3, 5, 3])
-        c0.markdown(f"{bias_emoji} **{pos.bias} {pos.symbol}** · {state_label} · {mode_label}{time_str}")
+        # Info row: identity | price ladder | P&L + time
+        c0, c1, c2 = st.columns([2.5, 4, 2.5])
+        c0.markdown(f"{bias_emoji} **{pos.bias} {pos.symbol}** · {state_label} · {mode_label}")
         c1.markdown(
-            f"fill **{entry_str}** · SL **{pos.stop_loss:.2f}** · "
-            f"TP1 **{pos.take_profit_1:.2f}** · TP2 **{tp2_str}**"
+            f"<small style='color:#aaa'>Entry</small> **{entry_str}** &nbsp;"
+            f"<small style='color:#e05252'>SL</small> **{pos.stop_loss:.2f}** &nbsp;"
+            f"<small style='color:#52b788'>TP1</small> **{pos.take_profit_1:.2f}** &nbsp;"
+            f"<small style='color:#52b788'>TP2</small> **{tp2_str}**",
+            unsafe_allow_html=True,
         )
-        if pnl_str:
-            c2.markdown(pnl_str)
+        right_md = pnl_str
+        if time_str:
+            right_md += f"  ·  <small>{time_str}</small>"
+        if right_md:
+            c2.markdown(right_md, unsafe_allow_html=True)
 
         # Button strip
         if pos.state == "FILLED":
             btn = st.columns([1, 1, 1, 1, 1, 5])
             col = 0
             if pos.exit_mode != "TP1" and pos.take_profit_1:
-                if btn[col].button("→ TP1", key=f"ord_tp1_{pos.id}",
+                if btn[col].button("→TP1", key=f"ord_tp1_{pos.id}",
                                    help=f"Switch exit to TP1 @ {pos.take_profit_1:.2f}"):
                     _switch_exit_mode(config, pos.id, "TP1")
                 col += 1
             if pos.exit_mode != "TP2" and pos.take_profit_2:
-                if btn[col].button("→ TP2", key=f"ord_tp2_{pos.id}",
+                if btn[col].button("→TP2", key=f"ord_tp2_{pos.id}",
                                    help=f"Switch exit to TP2 @ {pos.take_profit_2:.2f}"):
                     _switch_exit_mode(config, pos.id, "TP2")
                 col += 1
             if pos.exit_mode != "MANUAL":
                 if btn[col].button("✋ Hold", key=f"ord_hold_{pos.id}",
-                                   help="Cancel auto-exit, hold until manually closed"):
+                                   help="Hold manually — disarms auto-exit. Position stays open past time window until you close it or SL/TP triggers."):
                     _switch_exit_mode(config, pos.id, "MANUAL")
                 col += 1
             if btn[col].button("✕ Close", key=f"ord_close_{pos.id}", type="primary",
