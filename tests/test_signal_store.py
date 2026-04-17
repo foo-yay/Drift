@@ -261,6 +261,26 @@ class TestAggregateStats:
         assert stats["total_pnl"] == pytest.approx(2.0)
         store.close()
 
+    def test_entry_missed_excluded_from_resolved(self) -> None:
+        """ENTRY_MISSED trades must not count as resolved — they never filled."""
+        store = SignalStore(":memory:")
+        e1 = _make_event(as_of="2026-04-25T14:30:00+00:00")
+        e2 = _make_event(as_of="2026-04-25T14:45:00+00:00")
+        e3 = _make_event(as_of="2026-04-25T15:00:00+00:00")
+        for e in (e1, e2, e3):
+            store.insert_event(e)
+        rows = store.query()
+        store.upsert_outcome(rows[0].signal_key, "TP1_HIT", 31.6)   # real win
+        store.upsert_outcome(rows[1].signal_key, "ENTRY_MISSED", 0.0)
+        store.upsert_outcome(rows[2].signal_key, "ENTRY_MISSED", 0.0)
+        stats = store.win_rate_and_pnl()
+        # Only the TP1_HIT counts — ENTRY_MISSED trades are not resolved fills
+        assert stats["resolved"] == 1
+        assert stats["wins"] == 1
+        assert stats["win_rate_pct"] == pytest.approx(100.0)
+        assert stats["total_pnl"] == pytest.approx(31.6)
+        store.close()
+
     def test_stats_no_signals(self) -> None:
         store = SignalStore(":memory:")
         stats = store.win_rate_and_pnl()
