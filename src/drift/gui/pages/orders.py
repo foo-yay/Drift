@@ -467,43 +467,78 @@ def _render_active_position(config, pos) -> None:
 def _render_order_history_row(order) -> None:
     icon, _ = _STATE_BADGE.get(order.state, ("❓", "grey"))
     bias_emoji = _BIAS_EMOJI.get(order.bias, "")
-    with st.expander(
-        f"{icon} {order.state}  —  {bias_emoji} {order.bias} {order.symbol}  "
-        f"`{order.setup_type}`  {_age_label(order.created_at)}",
-        expanded=False,
-    ):
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Entry", f"{order.entry_min:.2f} – {order.entry_max:.2f}")
-        c2.metric("Stop", f"{order.stop_loss:.2f}")
-        c3.metric("TP1", f"{order.take_profit_1:.2f}")
-        c4.metric("Conf", f"{order.confidence}%")
-        if order.ib_order_id:
-            st.caption(f"IB orderId={order.ib_order_id}  permId={order.ib_perm_id}")
-        if order.reject_reason:
-            st.caption(f"Reason: {order.reject_reason}")
+    tp2_str = f"{order.take_profit_2:.2f}" if order.take_profit_2 else "—"
+    entry_str = f"{order.entry_min:.2f}–{order.entry_max:.2f}"
+
+    details = []
+    if order.ib_order_id:
+        details.append(f"IB orderId={order.ib_order_id}  permId={order.ib_perm_id}")
+    if order.reject_reason:
+        details.append(f"Reason: {order.reject_reason}")
+
+    with st.container(border=True):
+        c0, c1, c2 = st.columns([3, 5, 2], vertical_alignment="top")
+        c0.markdown(
+            f"{icon} {bias_emoji} **{order.bias} {order.symbol}**  \n"
+            f"<small style='color:#aaa'>`{order.setup_type}` · {order.confidence}%"
+            f" · **{order.state}**</small>",
+            unsafe_allow_html=True,
+        )
+        c1.markdown(
+            f"<small style='color:#aaa'>Entry</small> **{entry_str}** &ensp;"
+            f"<small style='color:#e05252'>SL</small> **{order.stop_loss:.2f}**<br>"
+            f"<small style='color:#52b788'>TP1</small> **{order.take_profit_1:.2f}** &ensp;"
+            f"<small style='color:#52b788'>TP2</small> **{tp2_str}**",
+            unsafe_allow_html=True,
+        )
+        c2.markdown(
+            f"<small style='color:#666'>{_age_label(order.created_at)}</small>",
+            unsafe_allow_html=True,
+        )
+        if details:
+            st.caption("  ·  ".join(details))
 
 
 def _render_position_history_row(pos) -> None:
     icon, _ = _STATE_BADGE.get(pos.state, ("❓", "grey"))
     bias_emoji = _BIAS_EMOJI.get(pos.bias, "")
+    tp2_str = f"{pos.take_profit_2:.2f}" if pos.take_profit_2 else "—"
+    entry_display = f"{pos.entry_fill:.2f}" if pos.entry_fill else (f"{pos.entry_limit:.2f}" if pos.entry_limit else "—")
 
-    pnl_str = ""
+    pnl_md = ""
     if pos.entry_fill and pos.exit_price:
         pts = (pos.exit_price - pos.entry_fill) if pos.bias == "LONG" else (pos.entry_fill - pos.exit_price)
         usd = pts * 0.50 * pos.quantity
-        pnl_str = f"  |  {pts:+.2f} pts (${usd:+.2f})"
+        clr = "#52b788" if pts >= 0 else "#e05252"
+        pnl_md = f"<span style='color:{clr};white-space:nowrap'>{pts:+.2f} pts (${usd:+.2f})</span>"
 
-    with st.expander(
-        f"{icon} {pos.state}  —  {bias_emoji} {pos.bias} {pos.symbol}  "
-        f"`{pos.setup_type}`{pnl_str}  {_age_label(pos.created_at)}",
-        expanded=False,
-    ):
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Entry", f"{pos.entry_fill or pos.entry_limit:.2f}")
-        c2.metric("Exit", f"{pos.exit_price:.2f}" if pos.exit_price else "—")
-        c3.metric("SL", f"{pos.stop_loss:.2f}")
-        c4.metric("Mode", pos.exit_mode)
-        if pos.exit_reason:
-            st.caption(f"Exit: {pos.exit_reason}")
-        if pos.parent_order_id:
-            st.caption(f"IB parent={pos.parent_order_id}  tp={pos.tp_order_id}  sl={pos.sl_order_id}")
+    details = []
+    if pos.exit_reason:
+        details.append(f"Exit: {pos.exit_reason}")
+    if pos.parent_order_id:
+        details.append(f"IB parent={pos.parent_order_id}  tp={pos.tp_order_id}  sl={pos.sl_order_id}")
+
+    with st.container(border=True):
+        c0, c1, c2 = st.columns([3, 5, 2], vertical_alignment="top")
+        mode_label = _MODE_LABEL.get(pos.exit_mode, pos.exit_mode or "—")
+        c0.markdown(
+            f"{icon} {bias_emoji} **{pos.bias} {pos.symbol}**  \n"
+            f"<small style='color:#aaa'>`{pos.setup_type}` · {mode_label}"
+            f" · **{pos.state}**</small>",
+            unsafe_allow_html=True,
+        )
+        c1.markdown(
+            f"<small style='color:#aaa'>Entry</small> **{entry_display}** &ensp;"
+            f"<small style='color:#e05252'>SL</small> **{pos.stop_loss:.2f}**<br>"
+            f"<small style='color:#52b788'>TP1</small> **{pos.take_profit_1:.2f}** &ensp;"
+            f"<small style='color:#52b788'>TP2</small> **{tp2_str}**"
+            + (f"&ensp; → exit **{pos.exit_price:.2f}**" if pos.exit_price else ""),
+            unsafe_allow_html=True,
+        )
+        c2.markdown(
+            (pnl_md + "<br>" if pnl_md else "") +
+            f"<small style='color:#666'>{_age_label(pos.created_at)}</small>",
+            unsafe_allow_html=True,
+        )
+        if details:
+            st.caption("  ·  ".join(details))
