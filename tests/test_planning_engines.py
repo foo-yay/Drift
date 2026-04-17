@@ -184,3 +184,36 @@ class TestTargetEngine:
         decision = _long_decision(confidence=60)
         _, tp2, _ = eng.calculate(decision, stop_loss=19481.0)
         assert tp2 is None
+
+    def test_natural_target_caps_tp1_long(self):
+        # VWAP is 19502, 1.8× projected TP1 would be well past it.
+        # natural_target_price should cap TP1 at VWAP and suppress TP2.
+        eng = TargetEngine(_risk_config(atr_target_mult=1.8))
+        decision = _long_decision(
+            confidence=75, setup_type="mean_reversion",
+            natural_target_price=19502.0
+        )
+        # entry_worst = 19496, stop_loss = 19481 → stop_dist = 15, proj TP1 = 19496 + 27 = 19523
+        tp1, tp2, _ = eng.calculate(decision, stop_loss=19481.0)
+        assert tp1 == pytest.approx(19502.0, abs=0.01)  # capped at VWAP
+        assert tp2 is None  # suppressed when structural ceiling applied
+
+    def test_natural_target_caps_tp1_short(self):
+        # Range fade SHORT: opposite boundary is 19500, proj TP1 would be below it.
+        eng = TargetEngine(_risk_config(atr_target_mult=1.8))
+        decision = _short_decision(
+            confidence=75, setup_type="range_fade",
+            natural_target_price=19500.0
+        )
+        # entry_worst = 19510, stop_loss = 19525 → stop_dist = 15, proj TP1 = 19510 - 27 = 19483
+        tp1, tp2, _ = eng.calculate(decision, stop_loss=19525.0)
+        assert tp1 == pytest.approx(19500.0, abs=0.01)  # floored at range boundary
+        assert tp2 is None
+
+    def test_natural_target_not_applied_when_none(self):
+        # Trending setup — natural_target_price absent, TP2 present for high confidence
+        eng = TargetEngine(_risk_config(atr_target_mult=1.8))
+        decision = _long_decision(confidence=75)
+        tp1, tp2, _ = eng.calculate(decision, stop_loss=19481.0)
+        assert tp1 > 19496.0  # projected freely past entry_max
+        assert tp2 is not None  # TP2 not suppressed

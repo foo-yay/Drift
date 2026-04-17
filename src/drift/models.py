@@ -107,6 +107,7 @@ class LLMDecision(BaseModel):
     entry_zone: list[float]
     invalidation_hint: str
     invalidation_price: float | None = None
+    natural_target_price: float | None = None
     hold_minutes: int = Field(ge=1, le=120)
     do_not_trade_if: list[str]
     watch_conditions: list[WatchCondition] = Field(default_factory=list)
