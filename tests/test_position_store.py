@@ -95,6 +95,14 @@ def test_set_exit_mode_manual(store):
     assert rows[0].active_tp is None
 
 
+def test_set_exit_mode_hold_expiry(store):
+    pos_id = _create(store)
+    store.set_exit_mode(pos_id, "HOLD_EXPIRY", active_tp=None)
+    rows = store.get_open()
+    assert rows[0].exit_mode == "HOLD_EXPIRY"
+    assert rows[0].active_tp is None
+
+
 # ------------------------------------------------------------------
 # close_position
 # ------------------------------------------------------------------

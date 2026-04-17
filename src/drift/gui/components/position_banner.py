@@ -20,7 +20,12 @@ from drift.gui.state import get_config, _PROJECT_ROOT
 log = logging.getLogger(__name__)
 
 _BIAS_EMOJI = {"LONG": "🟢", "SHORT": "🔴"}
-_MODE_BADGE = {"TP1": "🎯 TP1", "TP2": "🎯🎯 TP2", "MANUAL": "✋ Manual"}
+_MODE_BADGE = {
+    "TP1":         "🎯 TP1",
+    "TP2":         "🎯🎯 TP2",
+    "MANUAL":      "✋ Hold (indefinite)",
+    "HOLD_EXPIRY": "⏰ Hold to expiry",
+}
 
 
 def _time_display(pos) -> str:
@@ -38,6 +43,8 @@ def _time_display(pos) -> str:
         over = abs(remaining)
         if pos.exit_mode == "MANUAL":
             return f"✋ +{over:.0f}m past window"
+        if pos.exit_mode == "HOLD_EXPIRY":
+            return "⏰ closing..."
         return f"⚠️ +{over:.0f}m past window"
     except (ValueError, TypeError):
         return ""
@@ -152,7 +159,9 @@ def _render_position_card(config, pos) -> None:
         if pos.exit_mode != "TP2" and pos.take_profit_2:
             btn_labels.append("tp2")
         if pos.exit_mode != "MANUAL":
-            btn_labels.append("hold")
+            btn_labels.append("hold_indef")
+        if pos.exit_mode != "HOLD_EXPIRY":
+            btn_labels.append("hold_expiry")
         btn_labels += ["close", "assess"]
     else:
         btn_labels = ["cancel"]
@@ -202,10 +211,15 @@ def _render_position_card(config, pos) -> None:
                                       help=f"Switch exit to TP2 @ {pos.take_profit_2:.2f}"):
                     _switch_mode(config, pos.id, "TP2")
                 i += 1
-            if "hold" in btn_labels:
-                if btn_cols[i].button("✋ Hold", key=f"bn_hold_{pos.id}",
-                                      help="Hold manually — disarms auto-exit"):
+            if "hold_indef" in btn_labels:
+                if btn_cols[i].button("✋ Hold", key=f"bn_hold_indef_{pos.id}",
+                                      help="Hold indefinitely — cancels TP on IB. Position stays open until you close it manually or SL fires. Time window is ignored."):
                     _switch_mode(config, pos.id, "MANUAL")
+                i += 1
+            if "hold_expiry" in btn_labels:
+                if btn_cols[i].button("⏰ Exp", key=f"bn_hold_exp_{pos.id}",
+                                      help="Hold to expiry — cancels TP on IB. Position auto-closes at the time window. SL is still live."):
+                    _switch_mode(config, pos.id, "HOLD_EXPIRY")
                 i += 1
             if btn_cols[i].button("✕ Close", key=f"bn_close_{pos.id}",
                                   help="Submit market order to close now"):

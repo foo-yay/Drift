@@ -139,9 +139,16 @@ class PositionManager:
     def switch_exit_mode(self, position_id: int, new_mode: str) -> dict[str, Any]:
         """Switch exit mode for a FILLED position.
 
-        new_mode: "TP1" | "TP2" | "MANUAL"
+        new_mode: "TP1" | "TP2" | "MANUAL" | "HOLD_EXPIRY"
+
+        MANUAL      — cancel TP on IB; position stays open indefinitely until
+                      operator closes it or SL fires.
+        HOLD_EXPIRY — cancel TP on IB (same IB action as MANUAL); a background
+                      daemon auto-closes the position at max_hold_minutes.
         """
         from drift.brokers.ib_client import IBClient
+
+        _NO_ACTIVE_TP = {"MANUAL", "HOLD_EXPIRY"}
 
         pos = self._positions.get_by_id(position_id)
         if not pos or pos.state != "FILLED":
@@ -155,10 +162,10 @@ class PositionManager:
         if new_mode == "TP1":
             if not pos.take_profit_1:
                 return {"status": "error", "message": "No TP1 price available."}
-            if pos.exit_mode == "MANUAL":
-                # Place new TP1 order
+            if pos.exit_mode in _NO_ACTIVE_TP:
+                # No live TP order — place a fresh one
                 result = client.modify_tp(
-                    old_tp_order_id=0,  # no existing TP to cancel
+                    old_tp_order_id=0,
                     new_tp_price=pos.take_profit_1,
                     bias=pos.bias,
                     parent_order_id=pos.parent_order_id or 0,
@@ -181,7 +188,7 @@ class PositionManager:
         elif new_mode == "TP2":
             if not pos.take_profit_2:
                 return {"status": "error", "message": "No TP2 price available."}
-            if pos.exit_mode == "MANUAL":
+            if pos.exit_mode in _NO_ACTIVE_TP:
                 result = client.modify_tp(
                     old_tp_order_id=0,
                     new_tp_price=pos.take_profit_2,
@@ -202,12 +209,15 @@ class PositionManager:
                 tp_order_id=result.get("tp_order_id"),
             )
 
-        elif new_mode == "MANUAL":
+        elif new_mode in ("MANUAL", "HOLD_EXPIRY"):
+            # Both hold modes cancel the active TP order on IB; only the stored
+            # mode value differs (MANUAL = indefinite, HOLD_EXPIRY = auto-close
+            # at max_hold_minutes via the position expiry daemon).
             if pos.tp_order_id:
                 result = client.cancel_tp(pos.tp_order_id)
                 if result["status"] != "ok":
                     return result
-            self._positions.set_exit_mode(position_id, "MANUAL", None)
+            self._positions.set_exit_mode(position_id, new_mode, None)
 
         else:
             return {"status": "error", "message": f"Unknown mode: {new_mode}"}

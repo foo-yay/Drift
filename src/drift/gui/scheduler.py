@@ -127,6 +127,12 @@ class BackgroundScheduler:
             daemon=True,
         )
         self._watch_thread.start()
+        self._expiry_thread = threading.Thread(
+            target=self._position_expiry_loop,
+            name="drift-position-expiry",
+            daemon=True,
+        )
+        self._expiry_thread.start()
         log.info(
             "BackgroundScheduler started — interval=%ds, watch_poll=%ds",
             loop_interval_seconds, _WATCH_POLL_INTERVAL,
@@ -569,6 +575,67 @@ def _compute_rsi(bars: list) -> float | None:
         return 100.0
     rs = avg_gain / avg_loss
     return 100.0 - (100.0 / (1.0 + rs))
+
+    # ------------------------------------------------------------------
+    # Position expiry daemon (HOLD_EXPIRY auto-close)
+    # ------------------------------------------------------------------
+
+    def _position_expiry_loop(self) -> None:
+        """Poll every 60 s; close any HOLD_EXPIRY position that has exceeded max_hold_minutes."""
+        time.sleep(30)  # startup delay — let the process settle
+        while True:
+            try:
+                self._close_expired_hold_positions()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Position expiry check error: %s", exc)
+            time.sleep(60)
+
+    def _close_expired_hold_positions(self) -> None:
+        """Close any FILLED HOLD_EXPIRY positions that have exceeded max_hold_minutes."""
+        from drift.brokers.position_manager import PositionManager
+        from drift.gui.state import _PROJECT_ROOT
+        from drift.storage.position_store import PositionStore
+        from drift.utils.config import load_app_config
+
+        config = load_app_config(self._config_path)
+        root = _PROJECT_ROOT
+        db_path = str(root / config.storage.sqlite_path)
+
+        store = PositionStore(db_path)
+        open_positions = store.get_open()
+        store.close()
+
+        now = datetime.now(tz=timezone.utc)
+        for pos in open_positions:
+            if pos.exit_mode != "HOLD_EXPIRY" or pos.state != "FILLED":
+                continue
+            if not pos.fill_time or not pos.max_hold_minutes:
+                continue
+            try:
+                fill_dt = datetime.fromisoformat(pos.fill_time)
+                if fill_dt.tzinfo is None:
+                    fill_dt = fill_dt.replace(tzinfo=timezone.utc)
+                elapsed_min = (now - fill_dt).total_seconds() / 60
+                if elapsed_min < pos.max_hold_minutes:
+                    continue
+            except (ValueError, TypeError):
+                continue
+
+            log.info(
+                "Position %d HOLD_EXPIRY elapsed (%.0f min >= %d min) — auto-closing",
+                pos.id, elapsed_min, pos.max_hold_minutes,
+            )
+            mgr = PositionManager(config, db_path)
+            result = mgr.manual_close(pos.id)
+            mgr.close()
+            if result["status"] == "ok":
+                log.info("Position %d closed at HOLD_EXPIRY timeout", pos.id)
+            else:
+                log.error(
+                    "Failed to auto-close position %d at HOLD_EXPIRY: %s",
+                    pos.id, result.get("message"),
+                )
+
 
 @st.cache_resource
 def _get_scheduler(config_path: str, loop_interval_seconds: int) -> BackgroundScheduler:
