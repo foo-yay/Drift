@@ -172,15 +172,17 @@ def _render_position_card(config, pos) -> None:
         "{white-space:nowrap!important;}</style>"
     )
 
-    col_widths = [2, 3, 1.2] + [0.65] * len(btn_labels)
+    # Dynamic button column widths: TP buttons wider than pure-emoji buttons
+    btn_col_widths = [0.85 if lbl in ("tp1", "tp2") else 0.65 for lbl in btn_labels]
+    col_widths = [2, 3.5] + btn_col_widths
 
     with st.container(border=True):
         st.markdown(_BTN_CSS, unsafe_allow_html=True)
         cols = st.columns(col_widths, vertical_alignment="top")
-        c0, c1, c2 = cols[0], cols[1], cols[2]
-        btn_cols = cols[3:]
+        c0, c1 = cols[0], cols[1]
+        btn_cols = cols[2:]
 
-        # Col 0: "📊 🟢 LONG MNQ" on line 1; mode badge + time on line 2
+        # Col 0: bias+symbol on line 1; mode badge + time on line 2
         time_part = (
             f"&nbsp;&nbsp;<span style='color:#666'>{time_md}</span>"
             if time_md else ""
@@ -191,18 +193,16 @@ def _render_position_card(config, pos) -> None:
             unsafe_allow_html=True,
         )
 
-        # Col 1: Entry/SL line 1, TP1/TP2 line 2
+        # Col 1: Entry/SL line 1, TP1/TP2 line 2, P&L line 3
+        pnl_line = f"<br>{pnl_md}" if pnl_md else ""
         c1.markdown(
             f"<small style='color:#aaa'>Entry</small> **{entry_str}** &ensp;"
             f"<small style='color:#e05252'>SL</small> **{pos.stop_loss:.2f}**<br>"
             f"<small style='color:#52b788'>TP1</small> **{pos.take_profit_1:.2f}** &ensp;"
-            f"<small style='color:#52b788'>TP2</small> **{tp2_str}**",
+            f"<small style='color:#52b788'>TP2</small> **{tp2_str}**"
+            f"{pnl_line}",
             unsafe_allow_html=True,
         )
-
-        # Col 2: P&L — single line
-        if pnl_md:
-            c2.markdown(pnl_md, unsafe_allow_html=True)
 
         # Buttons — inline, right side
         i = 0
