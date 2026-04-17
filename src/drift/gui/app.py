@@ -14,6 +14,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parents[3] / ".env", override=False)
 
+import os
+import yaml
 import streamlit as st
 
 from drift.gui.components.position_banner import render_position_banner
@@ -58,9 +60,56 @@ _pages = [
 # Sidebar header
 # ---------------------------------------------------------------------------
 
+_MODES = ["paper-live", "sandbox", "dry-run", "replay", "llm-debug"]
+_MODE_ICONS = {
+    "paper-live": "🟢",
+    "sandbox":    "🟡",
+    "dry-run":    "⚪",
+    "replay":     "🔵",
+    "llm-debug":  "🟣",
+}
+_CFG_PATH = (
+    Path(os.environ["DRIFT_CONFIG"])
+    if os.environ.get("DRIFT_CONFIG") and Path(os.environ["DRIFT_CONFIG"]).exists()
+    else Path(__file__).parents[3] / "config" / "settings.yaml"
+)
+
+
+def _set_mode(new_mode: str) -> None:
+    """Persist the selected mode to settings.yaml and reload config cache."""
+    with _CFG_PATH.open("r", encoding="utf-8") as fh:
+        raw: dict = yaml.safe_load(fh) or {}
+    raw.setdefault("app", {})["mode"] = new_mode
+    tmp = _CFG_PATH.with_suffix(".yaml.tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        yaml.dump(raw, fh, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    tmp.replace(_CFG_PATH)
+    st.cache_resource.clear()
+
+
+def _current_mode() -> str:
+    with _CFG_PATH.open("r", encoding="utf-8") as fh:
+        raw: dict = yaml.safe_load(fh) or {}
+    return raw.get("app", {}).get("mode", "sandbox")
+
+
 with st.sidebar:
     st.markdown("## 📈 Drift")
     st.caption("Local MNQ signal engine")
+    st.divider()
+
+    _mode = _current_mode()
+    _new_mode = st.selectbox(
+        "Mode",
+        _MODES,
+        index=_MODES.index(_mode) if _mode in _MODES else 0,
+        format_func=lambda m: f"{_MODE_ICONS[m]} {m}",
+        key="sidebar_mode_select",
+    )
+    if _new_mode != _mode:
+        _set_mode(_new_mode)
+        st.rerun()
+
     st.divider()
 
 nav = st.navigation(_pages, position="sidebar")
