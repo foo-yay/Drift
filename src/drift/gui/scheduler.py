@@ -127,6 +127,12 @@ class BackgroundScheduler:
             daemon=True,
         )
         self._watch_thread.start()
+        self._expiry_thread = threading.Thread(
+            target=self._position_expiry_loop,
+            name="drift-position-expiry",
+            daemon=True,
+        )
+        self._expiry_thread.start()
         log.info(
             "BackgroundScheduler started — interval=%ds, watch_poll=%ds",
             loop_interval_seconds, _WATCH_POLL_INTERVAL,
@@ -429,6 +435,72 @@ class BackgroundScheduler:
         except Exception as exc:  # noqa: BLE001
             log.debug("Position polling error: %s", exc)
 
+    # ------------------------------------------------------------------
+    # Position expiry daemon (HOLD_EXPIRY auto-close)
+    # ------------------------------------------------------------------
+
+    def _position_expiry_loop(self) -> None:
+        """Poll every 60 s; close any non-MANUAL position that has exceeded max_hold_minutes."""
+        time.sleep(30)  # startup delay — let the process settle
+        while True:
+            try:
+                self._close_expired_positions()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Position expiry check error: %s", exc)
+            time.sleep(60)
+
+    def _close_expired_positions(self) -> None:
+        """Close any FILLED trade that has exceeded max_hold_minutes.
+
+        MANUAL mode is exempt — the operator explicitly chose to hold
+        indefinitely, so the hold window is informational only.
+        All other modes (TP1, TP2, HOLD_EXPIRY) are auto-closed.
+        """
+        from drift.brokers.position_manager import PositionManager
+        from drift.gui.state import _PROJECT_ROOT
+        from drift.storage.trade_store import TradeStore
+        from drift.utils.config import load_app_config
+
+        config = load_app_config(self._config_path)
+        root = _PROJECT_ROOT
+        db_path = str(root / config.storage.sqlite_path)
+
+        store = TradeStore(db_path)
+        filled_trades = store.get_filled()
+        store.close()
+
+        now = datetime.now(tz=timezone.utc)
+        for pos in filled_trades:
+            # MANUAL = hold indefinitely; skip it
+            if pos.exit_mode == "MANUAL":
+                continue
+            if not pos.fill_time or not pos.max_hold_minutes:
+                continue
+            try:
+                fill_dt = datetime.fromisoformat(pos.fill_time)
+                if fill_dt.tzinfo is None:
+                    fill_dt = fill_dt.replace(tzinfo=timezone.utc)
+                elapsed_min = (now - fill_dt).total_seconds() / 60
+                if elapsed_min < pos.max_hold_minutes:
+                    continue
+            except (ValueError, TypeError):
+                continue
+
+            log.info(
+                "Trade %d %s expired (%.0f min >= %d min) — auto-closing",
+                pos.id, pos.exit_mode, elapsed_min, pos.max_hold_minutes,
+            )
+            mgr = PositionManager(config, db_path)
+            result = mgr.manual_close(pos.id)
+            mgr.close()
+            if result["status"] == "ok":
+                log.info("Trade %d auto-closed at hold window expiry", pos.id)
+            else:
+                log.error(
+                    "Failed to auto-close trade %d: %s",
+                    pos.id, result.get("message"),
+                )
+
 
 # ---------------------------------------------------------------------------
 # Watch condition helpers
@@ -569,6 +641,7 @@ def _compute_rsi(bars: list) -> float | None:
         return 100.0
     rs = avg_gain / avg_loss
     return 100.0 - (100.0 / (1.0 + rs))
+
 
 @st.cache_resource
 def _get_scheduler(config_path: str, loop_interval_seconds: int) -> BackgroundScheduler:

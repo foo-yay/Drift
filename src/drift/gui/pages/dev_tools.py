@@ -26,41 +26,45 @@ def _db_path(config) -> str:
 # ------------------------------------------------------------------
 
 def _seed_filled_position(config, bias: str = "LONG") -> str:
-    from drift.storage.position_store import PositionStore
+    from drift.storage.trade_store import TradeStore
 
     prices = {
         "LONG":  dict(entry=19_852.0, sl=19_820.0, tp1=19_905.0, tp2=19_945.0),
         "SHORT": dict(entry=19_848.0, sl=19_880.0, tp1=19_795.0, tp2=19_755.0),
     }[bias]
 
-    store = PositionStore(_db_path(config))
-    pos_id = store.create(
-        pending_order_id=0,
+    store = TradeStore(_db_path(config))
+    trade_id = store.create(
         signal_key=f"MNQ:{bias}:pullback_continuation:DEVTEST",
         symbol="MNQ",
         bias=bias,
         setup_type="pullback_continuation",
-        entry_limit=prices["entry"],
+        entry_min=prices["entry"],
+        entry_max=prices["entry"],
         stop_loss=prices["sl"],
         take_profit_1=prices["tp1"],
         take_profit_2=prices["tp2"],
-        max_hold_minutes=30,
         thesis=(
             "Dev-test position seeded manually.  "
             "Price was holding cleanly above 9EMA after a 3-bar pullback on 5m. "
             "Volume on the reclaim bar was 1.4× average."
         ),
+        source="dev",
+        state="WORKING",
+        entry_limit=prices["entry"],
+        max_hold_minutes=30,
     )
     store.mark_filled(
-        pos_id,
+        trade_id,
         fill_price=prices["entry"],
         fill_time=datetime.now(tz=timezone.utc).isoformat(),
     )
-    return f"Created {bias} FILLED position id={pos_id}"
+    store.close()
+    return f"Created {bias} FILLED trade id={trade_id}"
 
 
 def _seed_pending_order(config, bias: str = "LONG") -> str:
-    from drift.storage.pending_order_store import PendingOrderStore
+    from drift.storage.trade_store import TradeStore
 
     if bias == "LONG":
         row = dict(
@@ -75,7 +79,7 @@ def _seed_pending_order(config, bias: str = "LONG") -> str:
             setup_type="failed_breakout_reversion",
         )
 
-    store = PendingOrderStore(_db_path(config))
+    store = TradeStore(_db_path(config))
     store.create(
         signal_key=f"MNQ:{bias}:{row['setup_type']}:DEVTEST",
         symbol="MNQ",
@@ -86,53 +90,59 @@ def _seed_pending_order(config, bias: str = "LONG") -> str:
         stop_loss=row["stop_loss"],
         take_profit_1=row["take_profit_1"],
         take_profit_2=row["take_profit_2"],
-        confidence=74,
         thesis=(
             f"Dev-test pending {bias} order.  "
             "R:R looks clean, structure intact, no high-impact events for 25 minutes."
         ),
+        confidence=74,
         max_hold_minutes=25,
         generated_at=datetime.now(tz=timezone.utc).isoformat(),
+        source="dev",
     )
-    return f"Created PENDING {bias} order"
+    store.close()
+    return f"Created PENDING {bias} trade"
 
 
 def _seed_working_position(config, bias: str = "LONG") -> str:
     """WORKING = entry order placed but not yet filled."""
-    from drift.storage.position_store import PositionStore
+    from drift.storage.trade_store import TradeStore
 
     prices = {
         "LONG":  dict(entry=19_852.0, sl=19_820.0, tp1=19_905.0, tp2=19_945.0),
         "SHORT": dict(entry=19_848.0, sl=19_880.0, tp1=19_795.0, tp2=19_755.0),
     }[bias]
 
-    store = PositionStore(_db_path(config))
-    pos_id = store.create(
-        pending_order_id=0,
+    store = TradeStore(_db_path(config))
+    trade_id = store.create(
         signal_key=f"MNQ:{bias}:breakout_continuation:DEVTEST",
         symbol="MNQ",
         bias=bias,
         setup_type="breakout_continuation",
-        entry_limit=prices["entry"],
+        entry_min=prices["entry"],
+        entry_max=prices["entry"],
         stop_loss=prices["sl"],
         take_profit_1=prices["tp1"],
         take_profit_2=prices["tp2"],
+        thesis="Dev-test WORKING trade (entry limit not yet filled).",
+        source="dev",
+        state="WORKING",
+        entry_limit=prices["entry"],
         max_hold_minutes=30,
-        thesis="Dev-test WORKING position (entry limit not yet filled).",
         parent_order_id=99901,
         tp_order_id=99902,
         sl_order_id=99903,
     )
-    return f"Created {bias} WORKING position id={pos_id}"
+    store.close()
+    return f"Created {bias} WORKING trade id={trade_id}"
 
 
 def _fire_real_bracket(config, bias: str) -> dict:
-    """Fetch live price, build tight bracket, submit to IB Gateway, store position."""
+    """Fetch live price, build tight bracket, submit to IB Gateway, store trade."""
     from types import SimpleNamespace
 
     from drift.brokers.ib_client import IBClient
     from drift.data.providers.yfinance_provider import YFinanceProvider
-    from drift.storage.position_store import PositionStore
+    from drift.storage.trade_store import TradeStore
 
     # Delayed quote (~15 min) — add buffer so limit fills even with drift
     current = YFinanceProvider().get_latest_quote("MNQ")
@@ -142,12 +152,12 @@ def _fire_real_bracket(config, bias: str) -> dict:
         return round(round(p * 4) / 4, 2)
 
     if bias == "LONG":
-        entry = _tick(current + 15)   # above market → fills immediately or near-immediately
+        entry = _tick(current + 15)
         sl    = _tick(entry - 30)
         tp1   = _tick(entry + 20)
         tp2   = _tick(entry + 40)
     else:
-        entry = _tick(current - 15)   # below market → sells immediately or near-immediately
+        entry = _tick(current - 15)
         sl    = _tick(entry + 30)
         tp1   = _tick(entry - 20)
         tp2   = _tick(entry - 40)
@@ -165,27 +175,30 @@ def _fire_real_bracket(config, bias: str) -> dict:
         result["_prices"] = dict(current=current, entry=entry, sl=sl, tp1=tp1, tp2=tp2)
         return result
 
-    # Record in position store so fill-detection and banner pick it up
-    store = PositionStore(_db_path(config))
-    pos_id = store.create(
-        pending_order_id=0,
+    # Record in trade store so fill-detection and banner pick it up
+    store = TradeStore(_db_path(config))
+    trade_id = store.create(
         signal_key=f"MNQ:{bias}:ib_bracket_test:DEVTEST",
         symbol="MNQ",
         bias=bias,
         setup_type="ib_bracket_test",
-        entry_limit=entry,
+        entry_min=entry,
+        entry_max=entry,
         stop_loss=sl,
         take_profit_1=tp1,
         take_profit_2=tp2,
-        max_hold_minutes=30,
         thesis="Dev Tools live IB bracket test — placed via Dev Tools page.",
+        source="dev",
+        state="WORKING",
+        entry_limit=entry,
+        max_hold_minutes=30,
         parent_order_id=result["order_id"],
         tp_order_id=result["tp_order_id"],
         sl_order_id=result["sl_order_id"],
     )
     store.close()
 
-    result["pos_id"] = pos_id
+    result["pos_id"] = trade_id
     result["_prices"] = dict(current=current, entry=entry, sl=sl, tp1=tp1, tp2=tp2)
     return result
 
@@ -193,15 +206,12 @@ def _fire_real_bracket(config, bias: str) -> dict:
 def _clear_test_data(config) -> str:
     import sqlite3
     conn = sqlite3.connect(_db_path(config))
-    ap = conn.execute(
-        "DELETE FROM active_positions WHERE signal_key LIKE '%DEVTEST%'"
-    ).rowcount
-    po = conn.execute(
-        "DELETE FROM pending_orders WHERE signal_key LIKE '%DEVTEST%'"
+    n = conn.execute(
+        "DELETE FROM trades WHERE signal_key LIKE '%DEVTEST%'"
     ).rowcount
     conn.commit()
     conn.close()
-    return f"Removed {ap} active position(s) and {po} pending order(s)."
+    return f"Removed {n} dev trade(s)."
 
 
 # ------------------------------------------------------------------
@@ -287,30 +297,18 @@ def page() -> None:
     import sqlite3
     conn = sqlite3.connect(_db_path(config))
 
-    ap_rows = conn.execute(
-        "SELECT id, bias, state, exit_mode, signal_key FROM active_positions "
-        "WHERE signal_key LIKE '%DEVTEST%' ORDER BY created_at DESC"
-    ).fetchall()
-
-    po_rows = conn.execute(
-        "SELECT id, bias, state, signal_key FROM pending_orders "
+    rows = conn.execute(
+        "SELECT id, bias, state, exit_mode, source, signal_key FROM trades "
         "WHERE signal_key LIKE '%DEVTEST%' ORDER BY created_at DESC"
     ).fetchall()
     conn.close()
 
-    if ap_rows:
-        st.markdown("**Active positions (DEVTEST)**")
-        for r in ap_rows:
-            st.text(f"  id={r[0]}  bias={r[1]}  state={r[2]}  exit_mode={r[3]}")
+    if rows:
+        st.markdown("**Dev trades (DEVTEST)**")
+        for r in rows:
+            st.text(f"  id={r[0]}  bias={r[1]}  state={r[2]}  exit={r[3]}  src={r[4]}")
     else:
-        st.caption("No DEVTEST active positions.")
-
-    if po_rows:
-        st.markdown("**Pending orders (DEVTEST)**")
-        for r in po_rows:
-            st.text(f"  id={r[0]}  bias={r[1]}  state={r[2]}")
-    else:
-        st.caption("No DEVTEST pending orders.")
+        st.caption("No DEVTEST trades.")
 
     # ------------------------------------------------------------------
     # Section 3b — Real IB bracket orders

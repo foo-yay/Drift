@@ -77,11 +77,19 @@ class IBClient:
             readonly=False,
         )
         contract = mnq_contract()
-        qualified = ib.qualifyContracts(contract)
-        if not qualified:
+        candidates = ib.qualifyContracts(contract)
+        if not candidates:
             ib.disconnect()
             raise RuntimeError("Could not qualify MNQ contract with IB.")
-        return ib, qualified[0]
+        # Pick front-month: sort by lastTradeDateOrContractMonth ascending
+        from datetime import date
+        def _expiry(c) -> str:
+            return c.lastTradeDateOrContractMonth or "99999999"
+        candidates_sorted = sorted(candidates, key=_expiry)
+        front_month = candidates_sorted[0]
+        log.info("Resolved MNQ contract: %s (expiry %s)", front_month.localSymbol,
+                 front_month.lastTradeDateOrContractMonth)
+        return ib, front_month
 
     # ------------------------------------------------------------------
     # Pre-flight connectivity check
@@ -135,6 +143,7 @@ class IBClient:
                 sl_order_id — SL child orderId
                 message   — error description on failure
         """
+        _ensure_event_loop()
         try:
             from ib_insync import IB
         except ImportError:
@@ -340,6 +349,7 @@ class IBClient:
 
     def close_position(self, bias: str, quantity: int = 1) -> dict[str, Any]:
         """Submit a market order to close an open position immediately."""
+        _ensure_event_loop()
         try:
             from ib_insync import MarketOrder
             ib, contract = self._connect()
@@ -389,6 +399,7 @@ class IBClient:
         Returns:
             {"status": "ok", "order_status": "Filled"|"Submitted"|..., "avg_fill_price": float|None}
         """
+        _ensure_event_loop()
         try:
             from ib_insync import IB
             ib = IB()

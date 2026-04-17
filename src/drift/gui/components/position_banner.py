@@ -1,11 +1,12 @@
-"""Global position banner — shows active positions on every page.
+"""Global banner — pending approvals + active positions on every page.
 
 Call ``render_position_banner()`` from ``gui/app.py`` (after page config, before
 navigation) so it appears at the top of every Streamlit page regardless of which
 page the user is viewing.
 
-Renders as one compact row per open position with action buttons inline.
-Auto-refreshes P&L every 30 s via st.fragment without a full page reload.
+Renders one card per pending approval and one card per open position with action
+buttons inline. Auto-refreshes every 15 s via st.fragment without a full page
+reload.
 """
 from __future__ import annotations
 
@@ -19,22 +20,16 @@ from drift.gui.state import get_config, _PROJECT_ROOT
 log = logging.getLogger(__name__)
 
 _BIAS_EMOJI = {"LONG": "🟢", "SHORT": "🔴"}
-
-# Align text rows with button rows inside st.columns
-_VALIGN_CSS = """
-<style>
-[data-testid="stHorizontalBlock"] { align-items: center !important; }
-</style>
-"""
+_MODE_BADGE = {
+    "TP1":         "🎯 TP1",
+    "TP2":         "🎯🎯 TP2",
+    "MANUAL":      "✋ Manual",
+    "HOLD_EXPIRY": "⏰ Expiry",
+}
 
 
 def _time_display(pos) -> str:
-    """Return a time string for the hold window.
-
-    MANUAL mode: show how far past (or short of) the window we are.
-    TP1/TP2 mode: show time remaining (auto-exit is still armed).
-    Never implies auto-close on expiry — that doesn't happen.
-    """
+    """Return a time string for the hold window."""
     if not (pos.fill_time and pos.max_hold_minutes):
         return ""
     try:
@@ -43,129 +38,200 @@ def _time_display(pos) -> str:
             fill_dt = fill_dt.replace(tzinfo=timezone.utc)
         elapsed_min = (datetime.now(tz=timezone.utc) - fill_dt).total_seconds() / 60
         remaining = pos.max_hold_minutes - elapsed_min
-        if remaining > 0:
+        if remaining >= 0.5:
             return f"⏱ {remaining:.0f}m"
-        # Past window
+        if remaining > -0.5:
+            return "⏱ 0m"
         over = abs(remaining)
         if pos.exit_mode == "MANUAL":
             return f"✋ +{over:.0f}m past window"
-        return f"⚠️ +{over:.0f}m past window"
+        return "⏰ closing..."
     except (ValueError, TypeError):
         return ""
 
 
-@st.fragment(run_every=30)
+@st.fragment(run_every=15)
 def render_position_banner() -> None:
-    """Render a compact per-position row banner. Reruns every 30 s for P&L."""
+    """Render pending approvals + open positions at the top of every page."""
     config = get_config()
     if not config.broker.enabled:
         return
 
     try:
-        from drift.storage.position_store import PositionStore
+        from drift.storage.trade_store import TradeStore
 
-        store = PositionStore(str(_PROJECT_ROOT / config.storage.sqlite_path))
-        open_positions = store.get_open()
+        db_path = str(_PROJECT_ROOT / config.storage.sqlite_path)
+
+        store = TradeStore(db_path)
+        store.expire_stale(config.broker.approval_expiry_minutes)
+        all_open = store.get_open()
         store.close()
     except Exception:  # noqa: BLE001
         return
 
-    if not open_positions:
+    pending_orders = [t for t in all_open if t.state == "PENDING"]
+    active_positions = [t for t in all_open if t.state in ("WORKING", "FILLED")]
+
+    if not active_positions and not pending_orders:
         return
 
-    st.markdown(_VALIGN_CSS, unsafe_allow_html=True)
-    for pos in open_positions:
-        _render_row(config, pos)
+    for order in pending_orders:
+        _render_pending_banner_card(config, order)
+
+    for pos in active_positions:
+        _render_position_card(config, pos)
 
 
-def _render_row(config, pos) -> None:
-    """One compact row: identity | price ladder | P&L + time | action buttons."""
-    bias_emoji = _BIAS_EMOJI.get(pos.bias, "")
-    state_str = "⏳" if pos.state == "WORKING" else "📊"
-    entry_str = f"{pos.entry_fill:.2f}" if pos.entry_fill else f"lim {pos.entry_limit:.2f}"
+def _render_pending_banner_card(config, order) -> None:
+    """Compact pending-approval card: info block + full-width button row."""
+    bias_emoji = _BIAS_EMOJI.get(order.bias, "")
 
-    # Exit mode badge — makes it clear what the current auto-exit target is
-    mode_badge = {"TP1": "🎯 TP1", "TP2": "🎯🎯 TP2", "MANUAL": "✋ manual"}.get(pos.exit_mode, pos.exit_mode)
+    time_str = ""
+    if order.generated_at:
+        try:
+            gen = datetime.fromisoformat(order.generated_at)
+            if gen.tzinfo is None:
+                gen = gen.replace(tzinfo=timezone.utc)
+            elapsed = (datetime.now(tz=timezone.utc) - gen).total_seconds() / 60
+            remaining = order.max_hold_minutes - elapsed
+            if remaining >= 0.5:
+                time_str = f"⏱ {remaining:.0f}m"
+            elif remaining > -0.5:
+                time_str = "⏱ 0m"
+            else:
+                time_str = f"⚠️ +{abs(remaining):.0f}m past window"
+        except (ValueError, TypeError):
+            pass
 
-    # Price ladder: Entry · SL · TP1 · TP2
-    tp2_str = f"{pos.take_profit_2:.2f}" if pos.take_profit_2 else "—"
-    ladder_md = (
-        f"<small style='color:#aaa'>Entry</small> **{entry_str}** &nbsp;"
-        f"<small style='color:#e05252'>SL</small> **{pos.stop_loss:.2f}** &nbsp;"
-        f"<small style='color:#52b788'>TP1</small> **{pos.take_profit_1:.2f}** &nbsp;"
-        f"<small style='color:#52b788'>TP2</small> **{tp2_str}**"
+    tp2_str = f"{order.take_profit_2:.2f}" if order.take_profit_2 else "—"
+    entry_str = f"{order.entry_min:.2f}–{order.entry_max:.2f}"
+    time_html = f" <span style='color:#888;font-size:0.85em'>{time_str}</span>" if time_str else ""
+
+    info_html = (
+        f"<div style='line-height:1.3;font-size:0.88rem;margin-bottom:10px'>"
+        f"⏳ {bias_emoji} <strong>{order.bias} {order.symbol}</strong>"
+        f" · <code>{order.setup_type}</code> · {order.confidence}%"
+        f" &ensp;Entry <strong>{entry_str}</strong>"
+        f" &ensp;<span style='color:#e05252'>SL</span> {order.stop_loss:.2f}"
+        f" &ensp;<span style='color:#52b788'>TP1</span> {order.take_profit_1:.2f}"
+        f" &ensp;<span style='color:#52b788'>TP2</span> {tp2_str}"
+        f"{time_html}</div>"
     )
 
-    # P&L
-    pnl_md = ""
+    with st.container(border=True):
+        st.markdown(info_html, unsafe_allow_html=True)
+        with st.container(horizontal=True, horizontal_alignment="left", gap="small"):
+            if st.button("✅ Approve", key=f"bn_approve_{order.id}", type="primary", width="content"):
+                _approve_order(config, order)
+            if st.button("🧠 Assess", key=f"bn_assess_pend_{order.id}", width="content"):
+                st.info("LLM assessment for pending orders is not yet implemented.", icon="🧠")
+            if st.button("❌ Reject", key=f"bn_reject_{order.id}", width="content"):
+                _reject_order(config, order)
+
+
+def _render_position_card(config, pos) -> None:
+    """Compact position card: info block + full-width button row."""
+    bias_emoji = _BIAS_EMOJI.get(pos.bias, "")
+    mode_badge = _MODE_BADGE.get(pos.exit_mode, pos.exit_mode)
+    tp2_str = f"{pos.take_profit_2:.2f}" if pos.take_profit_2 else "—"
+
+    # Entry display — filled shows fill price, working shows limit
+    if pos.entry_fill:
+        entry_part = f"filled @ <strong>{pos.entry_fill:.2f}</strong>"
+    elif pos.entry_limit:
+        entry_part = f"limit @ <strong>{pos.entry_limit:.2f}</strong>"
+    else:
+        entry_part = f"entry <strong>{pos.entry_min:.2f}–{pos.entry_max:.2f}</strong>"
+
+    # Status label
+    state_icon = "📊" if pos.state == "FILLED" else "⏳"
+    state_tag = (
+        f"<span style='color:#52b788'>filled</span>"
+        if pos.state == "FILLED"
+        else "<span style='color:#e8a838'>awaiting fill</span>"
+    )
+
+    # P&L (filled only)
+    pnl_html = ""
     if pos.entry_fill:
         try:
             from drift.data.providers.yfinance_provider import YFinanceProvider
             current_price = YFinanceProvider().get_latest_quote(pos.symbol)
             pts = (current_price - pos.entry_fill) if pos.bias == "LONG" else (pos.entry_fill - current_price)
             usd = pts * 0.50 * pos.quantity
-            color = "green" if pts >= 0 else "red"
-            pnl_md = f":{color}[{pts:+.2f} pts (${usd:+.2f})]"
+            clr = "#52b788" if pts >= 0 else "#e05252"
+            pnl_html = (
+                f" &ensp; <span style='color:{clr};white-space:nowrap'>"
+                f"{pts:+.2f} pts (${usd:+.2f})</span>"
+            )
         except Exception:  # noqa: BLE001
-            pnl_md = "P&L —"
+            pass
 
     time_md = _time_display(pos)
+    time_html = f" <span style='color:#888;font-size:0.85em'>{time_md}</span>" if time_md else ""
 
-    # Button count drives column sizing
-    n_btns = sum([
-        pos.state == "FILLED" and pos.exit_mode != "TP1" and bool(pos.take_profit_1),
-        pos.state == "FILLED" and pos.exit_mode != "TP2" and bool(pos.take_profit_2),
-        pos.state == "FILLED" and pos.exit_mode != "MANUAL",
-        True,  # close/cancel always present
-    ])
+    info_html = (
+        f"<div style='line-height:1.3;font-size:0.88rem;margin-bottom:10px'>"
+        f"{state_icon} {bias_emoji} <strong>{pos.bias} {pos.symbol}</strong>"
+        f" · {entry_part} · {mode_badge}{pnl_html}"
+        f" &ensp;<span style='color:#e05252'>SL</span> {pos.stop_loss:.2f}"
+        f" &ensp;<span style='color:#52b788'>TP1</span> {pos.take_profit_1:.2f}"
+        f" &ensp;<span style='color:#52b788'>TP2</span> {tp2_str}"
+        f" &ensp;{state_tag}{time_html}</div>"
+    )
 
-    cols = st.columns([2, 3.5, 2, 1.5] + [0.8] * n_btns)
-
-    # Col 0: identity
-    cols[0].markdown(f"{state_str} {bias_emoji} **{pos.bias} {pos.symbol}** · {mode_badge}")
-
-    # Col 1: price ladder
-    cols[1].markdown(ladder_md, unsafe_allow_html=True)
-
-    # Col 2: P&L
-    if pnl_md:
-        cols[2].markdown(pnl_md)
-
-    # Col 3: time
-    if time_md:
-        cols[3].markdown(f"<small>{time_md}</small>", unsafe_allow_html=True)
-
-    # Buttons
-    btn_col = 4
+    # Build button list
     if pos.state == "FILLED":
+        btn_keys: list[str] = []
         if pos.exit_mode != "TP1" and pos.take_profit_1:
-            if cols[btn_col].button("→TP1", key=f"bn_tp1_{pos.id}",
-                                    help=f"Switch exit to TP1 @ {pos.take_profit_1:.2f}"):
-                _switch_mode(config, pos.id, "TP1")
-            btn_col += 1
+            btn_keys.append("tp1")
         if pos.exit_mode != "TP2" and pos.take_profit_2:
-            if cols[btn_col].button("→TP2", key=f"bn_tp2_{pos.id}",
-                                    help=f"Switch exit to TP2 @ {pos.take_profit_2:.2f}"):
-                _switch_mode(config, pos.id, "TP2")
-            btn_col += 1
-        if pos.exit_mode != "MANUAL":
-            if cols[btn_col].button("✋", key=f"bn_hold_{pos.id}",
-                                    help="Hold manually — disarms auto-exit. Position stays open past time window until you close it or SL/TP triggers."):
-                _switch_mode(config, pos.id, "MANUAL")
-            btn_col += 1
-        if cols[btn_col].button("✕", key=f"bn_close_{pos.id}", type="primary",
-                                help="Submit market order to close now"):
-            _manual_close(config, pos.id)
+            btn_keys.append("tp2")
+        btn_keys += ["hold", "close", "assess"]
     else:
-        if cols[btn_col].button("✕", key=f"bn_cancel_{pos.id}", type="primary",
-                                help="Cancel working entry order"):
-            _manual_close(config, pos.id)
+        btn_keys = ["cancel", "assess"]
 
-    st.divider()
+    with st.container(border=True):
+        st.markdown(info_html, unsafe_allow_html=True)
 
+        with st.container(horizontal=True, horizontal_alignment="left", gap="small"):
+            if pos.state == "FILLED":
+                if "tp1" in btn_keys:
+                    if st.button("🎯 TP1", key=f"bn_tp1_{pos.id}",
+                                 help=f"Switch exit to TP1 @ {pos.take_profit_1:.2f}", width="content"):
+                        _switch_mode(config, pos.id, "TP1")
+                if "tp2" in btn_keys:
+                    if st.button("🎯 TP2", key=f"bn_tp2_{pos.id}",
+                                 help=f"Switch exit to TP2 @ {pos.take_profit_2:.2f}", width="content"):
+                        _switch_mode(config, pos.id, "TP2")
+                with st.popover("✋ Hold", width="content"):
+                    st.markdown("**Choose hold mode**")
+                    if st.button("✋ Hold indefinitely", key=f"bn_hold_indef_{pos.id}",
+                                 disabled=(pos.exit_mode == "MANUAL"), width="content"):
+                        _switch_mode(config, pos.id, "MANUAL")
+                    if st.button("⏰ Hold to expiry", key=f"bn_hold_exp_{pos.id}",
+                                 disabled=(pos.exit_mode == "HOLD_EXPIRY"), width="content"):
+                        _switch_mode(config, pos.id, "HOLD_EXPIRY")
+                if st.button("✕ Close", key=f"bn_close_{pos.id}",
+                             help="Close at market", width="content"):
+                    _manual_close(config, pos.id)
+                if st.button("🧠 Assess", key=f"bn_assess_{pos.id}",
+                             help="Quick AI assessment", width="content"):
+                    _assess_position(config, pos)
+            else:
+                if st.button("🚫 Cancel", key=f"bn_cancel_{pos.id}",
+                             help="Cancel working entry order", width="content"):
+                    _manual_close(config, pos.id)
+                if st.button("🧠 Assess", key=f"bn_assess_wk_{pos.id}",
+                             help="Quick AI assessment", width="content"):
+                    _assess_position(config, pos)
+
+
+# ---------------------------------------------------------------------------
+# Action helpers
+# ---------------------------------------------------------------------------
 
 def _switch_mode(config, position_id: int, mode: str) -> None:
-    """Switch exit mode via PositionManager."""
     from drift.brokers.position_manager import PositionManager
 
     db_path = str(_PROJECT_ROOT / config.storage.sqlite_path)
@@ -180,7 +246,6 @@ def _switch_mode(config, position_id: int, mode: str) -> None:
 
 
 def _manual_close(config, position_id: int) -> None:
-    """Close position via PositionManager."""
     from drift.brokers.position_manager import PositionManager
 
     db_path = str(_PROJECT_ROOT / config.storage.sqlite_path)
@@ -192,3 +257,44 @@ def _manual_close(config, position_id: int) -> None:
     else:
         st.error(f"Close failed: {result.get('message', 'unknown error')}")
     st.rerun()
+
+
+def _approve_order(config, order) -> None:
+    from drift.brokers.position_manager import PositionManager
+
+    db_path = str(_PROJECT_ROOT / config.storage.sqlite_path)
+    mgr = PositionManager(config, db_path)
+    errors = mgr.validate_for_approval(order)
+    if errors:
+        for err in errors:
+            st.error(err, icon="⛔")
+        mgr.close()
+        return
+    with st.spinner("Connecting and placing bracket order…"):
+        result = mgr.approve_and_place(order)
+    mgr.close()
+    if result["status"] == "ok":
+        st.toast(f"Bracket submitted — position #{result['position_id']}")
+    else:
+        st.error(f"Order failed: {result.get('message', 'unknown')}", icon="💥")
+    st.rerun()
+
+
+def _reject_order(config, order) -> None:
+    from drift.storage.trade_store import TradeStore
+
+    db_path = str(_PROJECT_ROOT / config.storage.sqlite_path)
+    s = TradeStore(db_path)
+    s.set_state(order.id, "REJECTED")
+    s.close()
+    st.rerun()
+
+
+def _assess_position(config, pos) -> None:
+    try:
+        from drift.ai.position_advisor import assess_position
+        with st.spinner("Getting LLM assessment…"):
+            advice = assess_position(config, pos)
+        st.info(advice, icon="🧠")
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Quick-Assess failed: {exc}")
