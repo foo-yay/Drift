@@ -129,14 +129,15 @@ def _render_pending_banner_card(config, order) -> None:
 
 
 def _render_position_card(config, pos) -> None:
-    """One card per open position: identity | prices (2 rows) | P&L + time | buttons."""
+    """One card per open position: identity | prices (2 rows) | P&L | buttons."""
     bias_emoji = _BIAS_EMOJI.get(pos.bias, "")
     state_str = "⏳" if pos.state == "WORKING" else "📊"
     entry_str = f"{pos.entry_fill:.2f}" if pos.entry_fill else f"lim {pos.entry_limit:.2f}"
     mode_badge = _MODE_BADGE.get(pos.exit_mode, pos.exit_mode)
     tp2_str = f"{pos.take_profit_2:.2f}" if pos.take_profit_2 else "—"
+    time_md = _time_display(pos)
 
-    # P&L
+    # P&L — single-line HTML span so it never wraps onto two lines
     pnl_md = ""
     if pos.entry_fill:
         try:
@@ -144,43 +145,51 @@ def _render_position_card(config, pos) -> None:
             current_price = YFinanceProvider().get_latest_quote(pos.symbol)
             pts = (current_price - pos.entry_fill) if pos.bias == "LONG" else (pos.entry_fill - current_price)
             usd = pts * 0.50 * pos.quantity
-            color = "green" if pts >= 0 else "red"
-            pnl_md = f":{color}[{pts:+.2f} pts (${usd:+.2f})]"
+            clr = "#52b788" if pts >= 0 else "#e05252"
+            pnl_md = (
+                f"<span style='color:{clr};white-space:nowrap'>"
+                f"{pts:+.2f} pts&nbsp;(${usd:+.2f})</span>"
+            )
         except Exception:  # noqa: BLE001
-            pnl_md = "P&L —"
+            pnl_md = "<span style='color:#aaa'>P&L —</span>"
 
-    time_md = _time_display(pos)
-
-    # Determine buttons before column layout so widths are correct
+    # Button slots — Hold is one popover regardless of current hold sub-mode
     if pos.state == "FILLED":
         btn_labels: list[str] = []
         if pos.exit_mode != "TP1" and pos.take_profit_1:
             btn_labels.append("tp1")
         if pos.exit_mode != "TP2" and pos.take_profit_2:
             btn_labels.append("tp2")
-        if pos.exit_mode != "MANUAL":
-            btn_labels.append("hold_indef")
-        if pos.exit_mode != "HOLD_EXPIRY":
-            btn_labels.append("hold_expiry")
-        btn_labels += ["close", "assess"]
+        btn_labels += ["hold", "close", "assess"]
     else:
         btn_labels = ["cancel"]
 
-    col_widths = [2, 3, 1.5] + [1.1] * len(btn_labels)
+    # CSS: tighten gap between button columns to ~5 px
+    _BTN_CSS = (
+        "<style>[data-testid='stHorizontalBlock']"
+        "{gap:5px!important;}</style>"
+    )
+
+    col_widths = [2, 3, 2] + [1.0] * len(btn_labels)
 
     with st.container(border=True):
+        st.markdown(_BTN_CSS, unsafe_allow_html=True)
         cols = st.columns(col_widths, vertical_alignment="top")
         c0, c1, c2 = cols[0], cols[1], cols[2]
         btn_cols = cols[3:]
 
-        # Col 0: direction on line 1, mode badge on line 2
+        # Col 0: "📊 🟢 LONG MNQ" on line 1; mode badge + time on line 2
+        time_part = (
+            f"&nbsp;&nbsp;<span style='color:#666'>{time_md}</span>"
+            if time_md else ""
+        )
         c0.markdown(
-            f"{state_str} {bias_emoji} **{pos.bias} {pos.symbol}**  \n"
-            f"<small style='color:#aaa'>{mode_badge}</small>",
+            f"{state_str} {bias_emoji} **{pos.bias} {pos.symbol}**<br>"
+            f"<small style='color:#aaa'>{mode_badge}</small>{time_part}",
             unsafe_allow_html=True,
         )
 
-        # Col 1: Entry/SL on line 1, TP1/TP2 on line 2
+        # Col 1: Entry/SL line 1, TP1/TP2 line 2
         c1.markdown(
             f"<small style='color:#aaa'>Entry</small> **{entry_str}** &ensp;"
             f"<small style='color:#e05252'>SL</small> **{pos.stop_loss:.2f}**<br>"
@@ -189,16 +198,11 @@ def _render_position_card(config, pos) -> None:
             unsafe_allow_html=True,
         )
 
-        # Col 2: P&L + time (top-aligned)
-        info_parts = []
+        # Col 2: P&L — single line
         if pnl_md:
-            info_parts.append(pnl_md)
-        if time_md:
-            info_parts.append(f"<small>{time_md}</small>")
-        if info_parts:
-            c2.markdown("  \n".join(info_parts), unsafe_allow_html=True)
+            c2.markdown(pnl_md, unsafe_allow_html=True)
 
-        # Buttons — inline right side, top-aligned
+        # Buttons — inline, right side
         i = 0
         if pos.state == "FILLED":
             if "tp1" in btn_labels:
@@ -211,16 +215,24 @@ def _render_position_card(config, pos) -> None:
                                       help=f"Switch exit to TP2 @ {pos.take_profit_2:.2f}"):
                     _switch_mode(config, pos.id, "TP2")
                 i += 1
-            if "hold_indef" in btn_labels:
-                if btn_cols[i].button("✋ Hold", key=f"bn_hold_indef_{pos.id}",
-                                      help="Hold indefinitely — cancels TP on IB. Position stays open until you close it manually or SL fires. Time window is ignored."):
+            # Single Hold button → popover with two sub-options
+            with btn_cols[i].popover("✋ Hold"):
+                st.markdown("**Choose hold mode**")
+                if st.button(
+                    "✋ Hold indefinitely",
+                    key=f"bn_hold_indef_{pos.id}",
+                    disabled=(pos.exit_mode == "MANUAL"),
+                    help="Cancel TP on IB. Position stays open until you close it or SL fires. Time window is ignored.",
+                ):
                     _switch_mode(config, pos.id, "MANUAL")
-                i += 1
-            if "hold_expiry" in btn_labels:
-                if btn_cols[i].button("⏰ Exp", key=f"bn_hold_exp_{pos.id}",
-                                      help="Hold to expiry — cancels TP on IB. Position auto-closes at the time window. SL is still live."):
+                if st.button(
+                    "⏰ Hold to expiry",
+                    key=f"bn_hold_exp_{pos.id}",
+                    disabled=(pos.exit_mode == "HOLD_EXPIRY"),
+                    help="Cancel TP on IB. Auto-closes at time window. SL is still active.",
+                ):
                     _switch_mode(config, pos.id, "HOLD_EXPIRY")
-                i += 1
+            i += 1
             if btn_cols[i].button("✕ Close", key=f"bn_close_{pos.id}",
                                   help="Submit market order to close now"):
                 _manual_close(config, pos.id)
