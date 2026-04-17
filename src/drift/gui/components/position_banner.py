@@ -88,44 +88,77 @@ def _render_pending_banner_card(config, order) -> None:
     """Compact pending approval card shown in the global banner."""
     bias_emoji = _BIAS_EMOJI.get(order.bias, "")
 
-    time_warning = ""
+    time_str = ""
     if order.generated_at:
         try:
             gen = datetime.fromisoformat(order.generated_at)
             if gen.tzinfo is None:
                 gen = gen.replace(tzinfo=timezone.utc)
             elapsed = (datetime.now(tz=timezone.utc) - gen).total_seconds() / 60
-            if elapsed > order.max_hold_minutes:
-                time_warning = " ⚠️ expired"
-            elif elapsed > order.max_hold_minutes * 0.7:
-                time_warning = f" ⏰ {order.max_hold_minutes - elapsed:.0f}m left"
+            remaining = order.max_hold_minutes - elapsed
+            if remaining >= 0.5:
+                time_str = f"⏱ {remaining:.0f}m"
+            elif remaining > -0.5:
+                time_str = "⏱ 0m"
+            else:
+                time_str = f"⚠️ +{abs(remaining):.0f}m past window"
         except (ValueError, TypeError):
             pass
 
     tp2_str = f"{order.take_profit_2:.2f}" if order.take_profit_2 else "—"
     entry_str = f"{order.entry_min:.2f}–{order.entry_max:.2f}"
 
+    _BTN_CSS = (
+        "<style>[data-testid='stHorizontalBlock']"
+        "{gap:6px!important;align-items:flex-start!important;}"
+        "[data-testid='stButton'],[data-testid='stPopover']{width:100%!important;}"
+        "[data-testid='stButton']>button,[data-testid='stPopover']>button"
+        "{white-space:nowrap!important;width:100%!important;justify-content:center!important;"
+        "min-height:2.5rem!important;padding:0.35rem 0.55rem!important;}"
+        "</style>"
+    )
+
+    time_part = (
+        f"&nbsp;&nbsp;<span style='color:#666'>{time_str}</span>"
+        if time_str else ""
+    )
+
+    col_widths = [2.2, 1.7, 1.7, 2.0, 2.8]
+
     with st.container(border=True):
-        c0, c1, c2, c3 = st.columns([2, 3, 1.2, 1.2], vertical_alignment="top")
+        st.markdown(_BTN_CSS, unsafe_allow_html=True)
+        cols = st.columns(col_widths, vertical_alignment="top")
+        c0, c1, c2, c3, c4 = cols[0], cols[1], cols[2], cols[3], cols[4]
+        with c4:
+            btn_cols = st.columns(3, gap="small", vertical_alignment="top")
+
         c0.markdown(
-            f"⏳ {bias_emoji} **{order.bias} {order.symbol}**  \n"
-            f"<small style='color:#aaa'>`{order.setup_type}` · {order.confidence}%"
-            f"{time_warning}</small>",
+            f"<div style='line-height:1.2'>⏳ {bias_emoji} <strong>{order.bias} {order.symbol}</strong><br>"
+            f"<small style='color:#aaa'>{order.setup_type} · {order.confidence}%</small>{time_part}</div>",
             unsafe_allow_html=True,
         )
         c1.markdown(
-            f"<small style='color:#aaa'>Entry</small> **{entry_str}** &ensp;"
-            f"<small style='color:#e05252'>SL</small> **{order.stop_loss:.2f}**<br>"
-            f"<small style='color:#52b788'>TP1</small> **{order.take_profit_1:.2f}** &ensp;"
-            f"<small style='color:#52b788'>TP2</small> **{tp2_str}**",
+            f"<div style='line-height:1.2'><small style='color:#aaa'>Entry</small> <strong>{entry_str}</strong><br>"
+            f"<small style='color:#e05252'>SL</small> <strong>{order.stop_loss:.2f}</strong></div>",
             unsafe_allow_html=True,
         )
-        if c2.button("✅ Approve", key=f"bn_approve_{order.id}", type="primary"):
+        c2.markdown(
+            f"<div style='line-height:1.2'><small style='color:#52b788'>TP1</small> <strong>{order.take_profit_1:.2f}</strong><br>"
+            f"<small style='color:#52b788'>TP2</small> <strong>{tp2_str}</strong></div>",
+            unsafe_allow_html=True,
+        )
+        c3.markdown("")  # placeholder — no P&L for pending orders
+
+        if btn_cols[0].button("✅ Approve", key=f"bn_approve_{order.id}", type="primary",
+                              use_container_width=True):
             _approve_order(config, order)
-        if c2.button("❌ Reject", key=f"bn_reject_{order.id}"):
-            _reject_order(config, order)
-        if c3.button("🧠 Assess", key=f"bn_assess_pend_{order.id}"):
+        if btn_cols[1].button("🧠", key=f"bn_assess_pend_{order.id}",
+                              help="Quick AI assessment",
+                              use_container_width=True):
             st.info("LLM assessment for pending orders is not yet implemented.", icon="🧠")
+        if btn_cols[2].button("❌ Reject", key=f"bn_reject_{order.id}",
+                              use_container_width=True):
+            _reject_order(config, order)
 
 
 def _render_position_card(config, pos) -> None:
