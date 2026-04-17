@@ -19,6 +19,7 @@ import streamlit as st
 from drift.gui.pages import (
     controls,
     live_monitor,
+    orders,
     replay_lab,
     settings,
     signal_history,
@@ -44,6 +45,7 @@ ensure_scheduler_running()
 _pages = [
     st.Page(live_monitor.page,   title="Live Monitor",   icon="📡", url_path="live",    default=True),
     st.Page(signal_history.page, title="Signal History", icon="📋", url_path="history"),
+    st.Page(orders.page,         title="Orders",         icon="🏦", url_path="orders"),
     st.Page(replay_lab.page,     title="Replay Lab",     icon="🔄", url_path="replay"),
     st.Page(controls.page,       title="Controls",       icon="⚙️", url_path="controls"),
     st.Page(settings.page,       title="Settings",       icon="🔧", url_path="settings"),
