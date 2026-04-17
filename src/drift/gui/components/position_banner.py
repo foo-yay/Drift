@@ -166,10 +166,14 @@ def _render_position_card(config, pos) -> None:
 
     _BTN_CSS = (
         "<style>[data-testid='stHorizontalBlock']"
-        "{gap:6px!important;align-items:flex-start!important;}"
-        "[data-testid='stButton'],[data-testid='stPopover']{width:100%!important;}"
+        "{gap:4px!important;align-items:flex-start!important;}"
+        "[data-testid='stVerticalBlock']{gap:0.2rem!important;}"
+        "[data-testid='stMarkdown'] p{margin:0!important;line-height:1.2!important;}"
+        "[data-testid='stButton'],[data-testid='stPopover']{width:100%!important;margin:0!important;}"
         "[data-testid='stButton']>button,[data-testid='stPopover']>button"
-        "{white-space:nowrap!important;width:100%!important;justify-content:flex-start!important;}"
+        "{white-space:nowrap!important;width:100%!important;justify-content:center!important;"
+        "min-height:2.5rem!important;padding:0.35rem 0.55rem!important;}"
+        "[data-testid='column']{padding:0!important;}"
         "</style>"
     )
 
