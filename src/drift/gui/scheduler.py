@@ -408,6 +408,27 @@ class BackgroundScheduler:
             outcome = self._run_cycle(trigger="watch")
             self._last_watch_was_trade_plan = (outcome == "TRADE_PLAN_ISSUED")
 
+        # Poll active IB positions for fill/exit detection
+        self._poll_positions(config)
+
+    def _poll_positions(self, config) -> None:
+        """Poll IB for position state changes (fills, exits)."""
+        if not config.broker.enabled:
+            return
+        try:
+            from drift.brokers.position_manager import PositionManager
+            from drift.gui.state import _PROJECT_ROOT
+
+            root = _PROJECT_ROOT
+            db_path = str(root / config.storage.sqlite_path)
+            mgr = PositionManager(config, db_path)
+            changes = mgr.poll_positions()
+            for ch in changes:
+                log.info("Position update: %s", ch)
+            mgr.close()
+        except Exception as exc:  # noqa: BLE001
+            log.debug("Position polling error: %s", exc)
+
 
 # ---------------------------------------------------------------------------
 # Watch condition helpers

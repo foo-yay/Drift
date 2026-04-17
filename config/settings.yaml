@@ -104,11 +104,13 @@ output:
 # Interactive Brokers paper trading (IB Gateway must be running — see README for IBC setup)
 # Set enabled: true and fill in your paper account number when ready to test.
 broker:
-  enabled: false
+  enabled: true
   host: "127.0.0.1"
   port: 7497          # 7497 = paper, 7496 = live
   client_id: 1
-  account: ""         # e.g. DU1234567
+  account: "DUQ244329"         # e.g. DU1234567
   order_timeout_seconds: 30
-  approval_expiry_minutes: 15
-
+  approval_expiry_minutes: 15  # Auto-start IB Gateway via IBC when Drift connects.
+  # Set to true and provide the full path to gatewaystartmacos.sh.
+  auto_start_gateway: true
+  gateway_script: "/Users/elliot/Documents/My Documents/Business/Carolina Edge Gaming/Market Arbitrage/Stocks/IBK Login Script/gatewaystartmacos.sh"

@@ -16,6 +16,7 @@ load_dotenv(Path(__file__).parents[3] / ".env", override=False)
 
 import streamlit as st
 
+from drift.gui.components.position_banner import render_position_banner
 from drift.gui.pages import (
     controls,
     live_monitor,
@@ -61,4 +62,10 @@ with st.sidebar:
     st.divider()
 
 nav = st.navigation(_pages, position="sidebar")
+
+# ---------------------------------------------------------------------------
+# Active position banner — visible on every page
+# ---------------------------------------------------------------------------
+render_position_banner()
+
 nav.run()

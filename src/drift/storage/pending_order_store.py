@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS pending_orders (
     take_profit_1   REAL NOT NULL,
     take_profit_2   REAL,
     thesis          TEXT NOT NULL,
+    max_hold_minutes INTEGER NOT NULL DEFAULT 60,
+    generated_at    TEXT NOT NULL DEFAULT '',  -- trade plan creation time (ISO)
     state           TEXT NOT NULL DEFAULT 'PENDING',
     ib_order_id     INTEGER,                 -- filled after submission
     ib_perm_id      INTEGER,
@@ -46,6 +48,12 @@ CREATE TABLE IF NOT EXISTS pending_orders (
 CREATE INDEX IF NOT EXISTS idx_po_state ON pending_orders(state);
 CREATE INDEX IF NOT EXISTS idx_po_created ON pending_orders(created_at);
 """
+
+# Migrations for existing databases that lack the new columns.
+_MIGRATIONS = [
+    "ALTER TABLE pending_orders ADD COLUMN max_hold_minutes INTEGER NOT NULL DEFAULT 60",
+    "ALTER TABLE pending_orders ADD COLUMN generated_at TEXT NOT NULL DEFAULT ''",
+]
 
 
 @dataclass
@@ -62,6 +70,8 @@ class PendingOrderRow:
     take_profit_1: float
     take_profit_2: float | None
     thesis: str
+    max_hold_minutes: int
+    generated_at: str
     state: str
     ib_order_id: int | None
     ib_perm_id: int | None
@@ -86,6 +96,18 @@ class PendingOrderStore:
         )
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_DDL)
+        self._run_migrations()
+
+    # ------------------------------------------------------------------
+    # Migrations
+    # ------------------------------------------------------------------
+
+    def _run_migrations(self) -> None:
+        for sql in _MIGRATIONS:
+            try:
+                self._conn.execute(sql)
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
     # ------------------------------------------------------------------
     # Writes
@@ -104,20 +126,25 @@ class PendingOrderStore:
         take_profit_1: float,
         take_profit_2: float | None,
         thesis: str,
+        max_hold_minutes: int = 60,
+        generated_at: str = "",
     ) -> int:
         """Insert a new PENDING order.  Returns the new row id."""
         now = datetime.now(tz=timezone.utc).isoformat()
+        if not generated_at:
+            generated_at = now
         cur = self._conn.execute(
             """
             INSERT OR IGNORE INTO pending_orders
                 (signal_key, symbol, bias, setup_type, confidence,
                  entry_min, entry_max, stop_loss, take_profit_1, take_profit_2,
-                 thesis, state, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,'PENDING',?,?)
+                 thesis, max_hold_minutes, generated_at,
+                 state, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'PENDING',?,?)
             """,
             (signal_key, symbol, bias, setup_type, confidence,
              entry_min, entry_max, stop_loss, take_profit_1, take_profit_2,
-             thesis, now, now),
+             thesis, max_hold_minutes, generated_at, now, now),
         )
         return cur.lastrowid or 0
 
@@ -206,6 +233,8 @@ def _row(r: sqlite3.Row) -> PendingOrderRow:
         take_profit_1=r["take_profit_1"],
         take_profit_2=r["take_profit_2"],
         thesis=r["thesis"],
+        max_hold_minutes=r["max_hold_minutes"],
+        generated_at=r["generated_at"],
         state=r["state"],
         ib_order_id=r["ib_order_id"],
         ib_perm_id=r["ib_perm_id"],

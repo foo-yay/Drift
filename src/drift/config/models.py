@@ -154,6 +154,8 @@ class BrokerSection(BaseModel):
     account: str = ""
     order_timeout_seconds: int = Field(default=30, ge=5)
     approval_expiry_minutes: int = Field(default=15, ge=1)  # reject approval if older than this
+    auto_start_gateway: bool = False  # launch IBC automatically when Gateway is not running
+    gateway_script: str = ""  # absolute path to gatewaystartmacos.sh
 
 
 class AppConfig(BaseModel):

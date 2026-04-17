@@ -274,6 +274,8 @@ class DriftApplication:
                 take_profit_1=plan.take_profit_1,
                 take_profit_2=plan.take_profit_2,
                 thesis=plan.thesis,
+                max_hold_minutes=plan.max_hold_minutes,
+                generated_at=plan.generated_at.isoformat(),
             )
             log.info("Pending order created for approval (signal_key=%s)", signal_key)
 
