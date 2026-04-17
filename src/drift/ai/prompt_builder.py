@@ -62,6 +62,7 @@ fences, no preamble, no explanation. Your entire response must be a single JSON 
   "entry_zone": [<low_price>, <high_price>],
   "invalidation_hint": "<string>",
   "invalidation_price": <exact price level that proves the thesis wrong, or null>,
+  "natural_target_price": <structural price where the trade should exit, or null>,
   "hold_minutes": <integer 1-120>,
   "do_not_trade_if": ["<condition>", ...],
   "watch_conditions": [
@@ -85,6 +86,15 @@ price level that definitively invalidates the setup — for example:
 - mean_reversion: the extreme price that initiated the extension
 This price is used to compute a structurally-meaningful stop loss. Be precise — use the exact level
 from the order blocks, VWAP, or structure visible in the snapshot.
+
+Set natural_target_price when the trade has a known structural ceiling/floor where the move
+is expected to exhaust — the system will cap TP1 there and suppress TP2. Use it for:
+- mean_reversion LONG: VWAP (price is expected to return to VWAP, not blow through it)
+- mean_reversion SHORT: VWAP
+- range_fade SHORT at resistance: the range low / opposite support boundary
+- range_fade LONG at support: the range high / opposite resistance boundary
+For trending setups (pullback_continuation, breakout_continuation, vwap_reclaim, opening_range_breakout)
+set natural_target_price to null — the momentum target is open-ended.
 """
 
 
