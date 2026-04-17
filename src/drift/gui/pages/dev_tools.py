@@ -126,6 +126,70 @@ def _seed_working_position(config, bias: str = "LONG") -> str:
     return f"Created {bias} WORKING position id={pos_id}"
 
 
+def _fire_real_bracket(config, bias: str) -> dict:
+    """Fetch live price, build tight bracket, submit to IB Gateway, store position."""
+    from types import SimpleNamespace
+
+    from drift.brokers.ib_client import IBClient
+    from drift.data.providers.yfinance_provider import YFinanceProvider
+    from drift.storage.position_store import PositionStore
+
+    # Delayed quote (~15 min) — add buffer so limit fills even with drift
+    current = YFinanceProvider().get_latest_quote("MNQ")
+
+    def _tick(p: float) -> float:
+        """Round to MNQ 0.25-point tick."""
+        return round(round(p * 4) / 4, 2)
+
+    if bias == "LONG":
+        entry = _tick(current + 15)   # above market → fills immediately or near-immediately
+        sl    = _tick(entry - 30)
+        tp1   = _tick(entry + 20)
+        tp2   = _tick(entry + 40)
+    else:
+        entry = _tick(current - 15)   # below market → sells immediately or near-immediately
+        sl    = _tick(entry + 30)
+        tp1   = _tick(entry - 20)
+        tp2   = _tick(entry - 40)
+
+    fake_order = SimpleNamespace(
+        bias=bias,
+        entry_max=entry,
+        entry_min=entry,
+        stop_loss=sl,
+        take_profit_1=tp1,
+    )
+
+    result = IBClient(config.broker).submit_bracket(fake_order)
+    if result["status"] != "ok":
+        result["_prices"] = dict(current=current, entry=entry, sl=sl, tp1=tp1, tp2=tp2)
+        return result
+
+    # Record in position store so fill-detection and banner pick it up
+    store = PositionStore(_db_path(config))
+    pos_id = store.create(
+        pending_order_id=0,
+        signal_key=f"MNQ:{bias}:ib_bracket_test:DEVTEST",
+        symbol="MNQ",
+        bias=bias,
+        setup_type="ib_bracket_test",
+        entry_limit=entry,
+        stop_loss=sl,
+        take_profit_1=tp1,
+        take_profit_2=tp2,
+        max_hold_minutes=30,
+        thesis="Dev Tools live IB bracket test — placed via Dev Tools page.",
+        parent_order_id=result["order_id"],
+        tp_order_id=result["tp_order_id"],
+        sl_order_id=result["sl_order_id"],
+    )
+    store.close()
+
+    result["pos_id"] = pos_id
+    result["_prices"] = dict(current=current, entry=entry, sl=sl, tp1=tp1, tp2=tp2)
+    return result
+
+
 def _clear_test_data(config) -> str:
     import sqlite3
     conn = sqlite3.connect(_db_path(config))
@@ -247,6 +311,54 @@ def page() -> None:
             st.text(f"  id={r[0]}  bias={r[1]}  state={r[2]}")
     else:
         st.caption("No DEVTEST pending orders.")
+
+    # ------------------------------------------------------------------
+    # Section 3b — Real IB bracket orders
+    # ------------------------------------------------------------------
+    st.subheader("Live IB Test Orders")
+    st.caption(
+        "Fetches the current MNQ price via yfinance (≈15 min delayed) and places a **real bracket order** "
+        "on your paper account through IB Gateway. The position is recorded in the DB so the banner "
+        "and fill-detection pick it up. Gateway must be running."
+    )
+
+    if not config.broker.enabled:
+        st.warning("Broker is disabled in settings — enable it to place real IB orders.", icon="⚠️")
+    else:
+        ib_col1, ib_col2 = st.columns(2)
+        with ib_col1:
+            if st.button("🟢 Place real LONG bracket (IB)", use_container_width=True):
+                with st.spinner("Connecting to IB Gateway and placing bracket..."):
+                    res = _fire_real_bracket(config, "LONG")
+                p = res.get("_prices", {})
+                if res["status"] == "ok":
+                    st.success(
+                        f"Bracket placed! parent={res['order_id']} tp={res['tp_order_id']} sl={res['sl_order_id']}  "
+                        f"entry={p.get('entry')} · sl={p.get('sl')} · tp1={p.get('tp1')} "
+                        f"(quoted @ {p.get('current'):.2f})"
+                    )
+                    st.rerun()
+                else:
+                    st.error(f"IB error: {res.get('message')}")
+                    if p:
+                        st.caption(f"Prices attempted — entry={p.get('entry')} sl={p.get('sl')} tp1={p.get('tp1')} (quoted @ {p.get('current'):.2f})")
+
+        with ib_col2:
+            if st.button("🔴 Place real SHORT bracket (IB)", use_container_width=True):
+                with st.spinner("Connecting to IB Gateway and placing bracket..."):
+                    res = _fire_real_bracket(config, "SHORT")
+                p = res.get("_prices", {})
+                if res["status"] == "ok":
+                    st.success(
+                        f"Bracket placed! parent={res['order_id']} tp={res['tp_order_id']} sl={res['sl_order_id']}  "
+                        f"entry={p.get('entry')} · sl={p.get('sl')} · tp1={p.get('tp1')} "
+                        f"(quoted @ {p.get('current'):.2f})"
+                    )
+                    st.rerun()
+                else:
+                    st.error(f"IB error: {res.get('message')}")
+                    if p:
+                        st.caption(f"Prices attempted — entry={p.get('entry')} sl={p.get('sl')} tp1={p.get('tp1')} (quoted @ {p.get('current'):.2f})")
 
     # ------------------------------------------------------------------
     # Section 4 — Cleanup

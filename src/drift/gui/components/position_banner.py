@@ -22,7 +22,11 @@ from drift.gui.state import get_config, _PROJECT_ROOT
 log = logging.getLogger(__name__)
 
 _BIAS_EMOJI = {"LONG": "🟢", "SHORT": "🔴"}
-_MODE_LABEL = {"TP1": "🎯 TP1", "TP2": "🎯🎯 TP2", "MANUAL": "✋ Manual Hold"}
+_MODE_BADGE = {
+    "TP1":    "🎯 exit @ TP1",
+    "TP2":    "🎯🎯 exit @ TP2",
+    "MANUAL": "✋ holding manually",
+}
 
 
 def render_position_banner() -> None:
@@ -49,82 +53,80 @@ def render_position_banner() -> None:
 
 
 def _render_single_position(config, pos) -> None:
-    """Render one position as a compact banner bar."""
+    """Render one position as a single compact row."""
     bias_emoji = _BIAS_EMOJI.get(pos.bias, "")
-    mode_label = _MODE_LABEL.get(pos.exit_mode, pos.exit_mode)
 
-    # Compute P&L if we have a fill price
-    pnl_display = ""
-    pnl_color = "grey"
+    # P&L
+    pnl_md = ""
     if pos.entry_fill is not None:
         try:
             from drift.data.providers.yfinance_provider import YFinanceProvider
-            provider = YFinanceProvider()
-            current_price = provider.get_latest_quote(pos.symbol)
-
-            if pos.bias == "LONG":
-                pnl_pts = current_price - pos.entry_fill
-            else:
-                pnl_pts = pos.entry_fill - current_price
-
-            pnl_usd = pnl_pts * 0.50 * pos.quantity  # MNQ = $0.50/point
-            pnl_color = "green" if pnl_pts >= 0 else "red"
-            pnl_display = f"**{pnl_pts:+.2f} pts** (${pnl_usd:+.2f})"
+            current_price = YFinanceProvider().get_latest_quote(pos.symbol)
+            pnl_pts = (current_price - pos.entry_fill) if pos.bias == "LONG" else (pos.entry_fill - current_price)
+            pnl_usd = pnl_pts * 0.50 * pos.quantity
+            color = "green" if pnl_pts >= 0 else "red"
+            pnl_md = f":{color}[**{pnl_pts:+.2f} pts** (${pnl_usd:+.2f})]"
         except Exception:  # noqa: BLE001
-            pnl_display = "P&L unavailable"
+            pnl_md = "*P&L unavailable*"
 
     # Time remaining
-    time_display = ""
+    time_md = ""
     if pos.fill_time and pos.max_hold_minutes:
         try:
             fill_dt = datetime.fromisoformat(pos.fill_time)
             if fill_dt.tzinfo is None:
                 fill_dt = fill_dt.replace(tzinfo=timezone.utc)
-            elapsed_min = (datetime.now(tz=timezone.utc) - fill_dt).total_seconds() / 60
-            remaining = pos.max_hold_minutes - elapsed_min
-            if remaining > 0:
-                time_display = f"{remaining:.0f}m left"
-            else:
-                time_display = "⚠️ Hold window expired"
+            remaining = pos.max_hold_minutes - (datetime.now(tz=timezone.utc) - fill_dt).total_seconds() / 60
+            time_md = f"⏱ {remaining:.0f}m" if remaining > 0 else "⚠️ expired"
         except (ValueError, TypeError):
             pass
 
-    # Banner container
+    entry_md = f"**{pos.entry_fill:.2f}**" if pos.entry_fill is not None else f"limit **{pos.entry_limit:.2f}**"
+    state_md = "⏳ pending" if pos.state == "WORKING" else "📊 active"
+    mode_md = _MODE_BADGE.get(pos.exit_mode, pos.exit_mode)
+
     with st.container():
-        state_label = "⏳ Entry pending" if pos.state == "WORKING" else f"📊 Active"
+        # Single info row: identity | entry | pnl | mode + time
+        c0, c1, c2, c3 = st.columns([3, 2, 2, 3])
+        c0.markdown(f"{bias_emoji} **{pos.bias} {pos.symbol}** · {state_md}")
+        c1.markdown(f"Entry: {entry_md}")
+        if pnl_md:
+            c2.markdown(pnl_md)
+        c3.markdown(f"{mode_md}{'  ·  ' + time_md if time_md else ''}")
 
-        # Main info row
-        cols = st.columns([3, 2, 2, 2, 2, 1])
-        cols[0].markdown(
-            f"{bias_emoji} **{pos.bias} {pos.symbol}** — {state_label}"
-        )
-        if pos.entry_fill is not None:
-            cols[1].markdown(f"Entry: **{pos.entry_fill:.2f}**")
-        else:
-            cols[1].markdown(f"Limit: **{pos.entry_limit:.2f}**")
-        if pnl_display:
-            cols[2].markdown(f":{pnl_color}[{pnl_display}]")
-        cols[3].markdown(mode_label)
-        if time_display:
-            cols[4].markdown(time_display)
-
-        # Action buttons (only for FILLED positions)
+        # Button row — only for filled positions, clearly labelled for what they switch TO
         if pos.state == "FILLED":
             btn_cols = st.columns([1, 1, 1, 1, 4])
+            col = 0
 
             if pos.exit_mode != "TP1" and pos.take_profit_1:
-                if btn_cols[0].button("🎯 TP1", key=f"banner_tp1_{pos.id}"):
+                if btn_cols[col].button(
+                    "→ TP1", key=f"banner_tp1_{pos.id}",
+                    help=f"Switch exit target to TP1 @ {pos.take_profit_1:.2f}",
+                ):
                     _switch_mode(config, pos.id, "TP1")
+                col += 1
 
             if pos.exit_mode != "TP2" and pos.take_profit_2:
-                if btn_cols[1].button("🎯🎯 TP2", key=f"banner_tp2_{pos.id}"):
+                if btn_cols[col].button(
+                    "→ TP2", key=f"banner_tp2_{pos.id}",
+                    help=f"Switch exit target to TP2 @ {pos.take_profit_2:.2f}",
+                ):
                     _switch_mode(config, pos.id, "TP2")
+                col += 1
 
             if pos.exit_mode != "MANUAL":
-                if btn_cols[2].button("✋ Hold", key=f"banner_hold_{pos.id}"):
+                if btn_cols[col].button(
+                    "✋ Hold", key=f"banner_hold_{pos.id}",
+                    help="Cancel auto-exit — hold until you close manually",
+                ):
                     _switch_mode(config, pos.id, "MANUAL")
+                col += 1
 
-            if btn_cols[3].button("🚪 Close Now", key=f"banner_close_{pos.id}", type="primary"):
+            if btn_cols[col].button(
+                "✕ Close", key=f"banner_close_{pos.id}", type="primary",
+                help="Submit market order to close this position immediately",
+            ):
                 _manual_close(config, pos.id)
 
         st.divider()
