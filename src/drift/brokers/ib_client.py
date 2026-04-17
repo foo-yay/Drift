@@ -143,6 +143,7 @@ class IBClient:
                 sl_order_id — SL child orderId
                 message   — error description on failure
         """
+        _ensure_event_loop()
         try:
             from ib_insync import IB
         except ImportError:
@@ -348,6 +349,7 @@ class IBClient:
 
     def close_position(self, bias: str, quantity: int = 1) -> dict[str, Any]:
         """Submit a market order to close an open position immediately."""
+        _ensure_event_loop()
         try:
             from ib_insync import MarketOrder
             ib, contract = self._connect()
@@ -397,6 +399,7 @@ class IBClient:
         Returns:
             {"status": "ok", "order_status": "Filled"|"Submitted"|..., "avg_fill_price": float|None}
         """
+        _ensure_event_loop()
         try:
             from ib_insync import IB
             ib = IB()
