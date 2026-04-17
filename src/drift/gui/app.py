@@ -19,6 +19,7 @@ import streamlit as st
 from drift.gui.components.position_banner import render_position_banner
 from drift.gui.pages import (
     controls,
+    dev_tools,
     live_monitor,
     orders,
     replay_lab,
@@ -48,8 +49,9 @@ _pages = [
     st.Page(signal_history.page, title="Signal History", icon="📋", url_path="history"),
     st.Page(orders.page,         title="Orders",         icon="🏦", url_path="orders"),
     st.Page(replay_lab.page,     title="Replay Lab",     icon="🔄", url_path="replay"),
-    st.Page(controls.page,       title="Controls",       icon="⚙️", url_path="controls"),
-    st.Page(settings.page,       title="Settings",       icon="🔧", url_path="settings"),
+    st.Page(controls.page,       title="Controls",       icon="⚙️",  url_path="controls"),
+    st.Page(dev_tools.page,      title="Dev Tools",      icon="🛠️",  url_path="dev"),
+    st.Page(settings.page,       title="Settings",       icon="🔧",  url_path="settings"),
 ]
 
 # ---------------------------------------------------------------------------
