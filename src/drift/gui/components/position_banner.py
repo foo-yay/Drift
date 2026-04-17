@@ -164,25 +164,23 @@ def _render_position_card(config, pos) -> None:
     else:
         btn_labels = ["cancel"]
 
-    # CSS: tighten gap between button columns to ~5 px
     _BTN_CSS = (
         "<style>[data-testid='stHorizontalBlock']"
-        "{gap:5px!important;}"
+        "{gap:6px!important;align-items:flex-start!important;}"
         "[data-testid='stButton']>button,[data-testid='stPopover']>button"
-        "{white-space:nowrap!important;}</style>"
+        "{white-space:nowrap!important;width:100%!important;justify-content:flex-start!important;}"
+        "</style>"
     )
 
-    # Dynamic button column widths: TP buttons wider than pure-emoji buttons
-    btn_col_widths = [0.85 if lbl in ("tp1", "tp2") else 0.65 for lbl in btn_labels]
-    col_widths = [2, 3.5] + btn_col_widths
+    button_col_width = 0.9
+    col_widths = [2.2, 1.7, 1.7, 2.0] + [button_col_width] * len(btn_labels)
 
     with st.container(border=True):
         st.markdown(_BTN_CSS, unsafe_allow_html=True)
         cols = st.columns(col_widths, vertical_alignment="top")
-        c0, c1 = cols[0], cols[1]
-        btn_cols = cols[2:]
+        c0, c1, c2, c3 = cols[0], cols[1], cols[2], cols[3]
+        btn_cols = cols[4:]
 
-        # Col 0: bias+symbol on line 1; mode badge + time on line 2
         time_part = (
             f"&nbsp;&nbsp;<span style='color:#666'>{time_md}</span>"
             if time_md else ""
@@ -192,15 +190,18 @@ def _render_position_card(config, pos) -> None:
             f"<small style='color:#aaa'>{mode_badge}</small>{time_part}",
             unsafe_allow_html=True,
         )
-
-        # Col 1: Entry/SL line 1, TP1/TP2 line 2, P&L line 3
-        pnl_line = f"<br>{pnl_md}" if pnl_md else ""
         c1.markdown(
-            f"<small style='color:#aaa'>Entry</small> **{entry_str}** &ensp;"
-            f"<small style='color:#e05252'>SL</small> **{pos.stop_loss:.2f}**<br>"
-            f"<small style='color:#52b788'>TP1</small> **{pos.take_profit_1:.2f}** &ensp;"
-            f"<small style='color:#52b788'>TP2</small> **{tp2_str}**"
-            f"{pnl_line}",
+            f"<small style='color:#aaa'>Entry</small> **{entry_str}**<br>"
+            f"<small style='color:#e05252'>SL</small> **{pos.stop_loss:.2f}**",
+            unsafe_allow_html=True,
+        )
+        c2.markdown(
+            f"<small style='color:#52b788'>TP1</small> **{pos.take_profit_1:.2f}**<br>"
+            f"<small style='color:#52b788'>TP2</small> **{tp2_str}**",
+            unsafe_allow_html=True,
+        )
+        c3.markdown(
+            f"<small style='color:#aaa'>P&L</small><br>{pnl_md}",
             unsafe_allow_html=True,
         )
 
