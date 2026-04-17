@@ -77,11 +77,19 @@ class IBClient:
             readonly=False,
         )
         contract = mnq_contract()
-        qualified = ib.qualifyContracts(contract)
-        if not qualified:
+        candidates = ib.qualifyContracts(contract)
+        if not candidates:
             ib.disconnect()
             raise RuntimeError("Could not qualify MNQ contract with IB.")
-        return ib, qualified[0]
+        # Pick front-month: sort by lastTradeDateOrContractMonth ascending
+        from datetime import date
+        def _expiry(c) -> str:
+            return c.lastTradeDateOrContractMonth or "99999999"
+        candidates_sorted = sorted(candidates, key=_expiry)
+        front_month = candidates_sorted[0]
+        log.info("Resolved MNQ contract: %s (expiry %s)", front_month.localSymbol,
+                 front_month.lastTradeDateOrContractMonth)
+        return ib, front_month
 
     # ------------------------------------------------------------------
     # Pre-flight connectivity check

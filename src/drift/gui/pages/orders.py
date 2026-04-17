@@ -299,14 +299,19 @@ def _render_pending_card(config, order) -> None:
     entry_str = f"{order.entry_min:.2f}–{order.entry_max:.2f}"
 
     with st.container(border=True):
-        c0, c1, c2 = st.columns([3, 5, 2])
+        c0, c1, c2 = st.columns([3, 5, 2], vertical_alignment="top")
         c0.markdown(
-            f"{bias_emoji} **{order.bias} {order.symbol}** · `{order.setup_type}` · {order.confidence}%"
-            + time_warning
+            f"{bias_emoji} **{order.bias} {order.symbol}**  \n"
+            f"<small style='color:#aaa'>`{order.setup_type}` · {order.confidence}%"
+            f"{time_warning}</small>",
+            unsafe_allow_html=True,
         )
         c1.markdown(
-            f"Entry **{entry_str}** · SL **{order.stop_loss:.2f}** · "
-            f"TP1 **{order.take_profit_1:.2f}** · TP2 **{tp2_str}**"
+            f"<small style='color:#aaa'>Entry</small> **{entry_str}** &ensp;"
+            f"<small style='color:#e05252'>SL</small> **{order.stop_loss:.2f}**<br>"
+            f"<small style='color:#52b788'>TP1</small> **{order.take_profit_1:.2f}** &ensp;"
+            f"<small style='color:#52b788'>TP2</small> **{tp2_str}**",
+            unsafe_allow_html=True,
         )
         c2.markdown(f"*{_age_label(order.created_at)}* · hold {order.max_hold_minutes}m")
 
@@ -360,21 +365,27 @@ def _render_active_position(config, pos) -> None:
             pass
 
     with st.container(border=True):
-        # Info row: identity | price ladder | P&L + time
-        c0, c1, c2 = st.columns([2.5, 4, 2.5])
-        c0.markdown(f"{bias_emoji} **{pos.bias} {pos.symbol}** · {state_label} · {mode_label}")
+        # Info row: identity | price ladder (2-row) | P&L + time
+        c0, c1, c2 = st.columns([2.5, 4, 2.5], vertical_alignment="top")
+        c0.markdown(
+            f"{bias_emoji} **{pos.bias} {pos.symbol}**  \n"
+            f"<small style='color:#aaa'>{state_label} · {mode_label}</small>",
+            unsafe_allow_html=True,
+        )
         c1.markdown(
-            f"<small style='color:#aaa'>Entry</small> **{entry_str}** &nbsp;"
-            f"<small style='color:#e05252'>SL</small> **{pos.stop_loss:.2f}** &nbsp;"
-            f"<small style='color:#52b788'>TP1</small> **{pos.take_profit_1:.2f}** &nbsp;"
+            f"<small style='color:#aaa'>Entry</small> **{entry_str}** &ensp;"
+            f"<small style='color:#e05252'>SL</small> **{pos.stop_loss:.2f}**<br>"
+            f"<small style='color:#52b788'>TP1</small> **{pos.take_profit_1:.2f}** &ensp;"
             f"<small style='color:#52b788'>TP2</small> **{tp2_str}**",
             unsafe_allow_html=True,
         )
-        right_md = pnl_str
+        right_parts = []
+        if pnl_str:
+            right_parts.append(pnl_str)
         if time_str:
-            right_md += f"  ·  <small>{time_str}</small>"
-        if right_md:
-            c2.markdown(right_md, unsafe_allow_html=True)
+            right_parts.append(f"<small>{time_str}</small>")
+        if right_parts:
+            c2.markdown("  \n".join(right_parts), unsafe_allow_html=True)
 
         # Button strip
         if pos.state == "FILLED":
@@ -395,7 +406,7 @@ def _render_active_position(config, pos) -> None:
                                    help="Hold manually — disarms auto-exit. Position stays open past time window until you close it or SL/TP triggers."):
                     _switch_exit_mode(config, pos.id, "MANUAL")
                 col += 1
-            if btn[col].button("✕ Close", key=f"ord_close_{pos.id}", type="primary",
+            if btn[col].button("✕ Close", key=f"ord_close_{pos.id}",
                                help="Submit market order to close immediately"):
                 _manual_close(config, pos.id)
             col += 1
