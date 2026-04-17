@@ -166,14 +166,11 @@ def _render_position_card(config, pos) -> None:
 
     _BTN_CSS = (
         "<style>[data-testid='stHorizontalBlock']"
-        "{gap:4px!important;align-items:flex-start!important;}"
-        "[data-testid='stVerticalBlock']{gap:0.2rem!important;}"
-        "[data-testid='stMarkdown'] p{margin:0!important;line-height:1.2!important;}"
-        "[data-testid='stButton'],[data-testid='stPopover']{width:100%!important;margin:0!important;}"
+        "{gap:6px!important;align-items:flex-start!important;}"
+        "[data-testid='stButton'],[data-testid='stPopover']{width:100%!important;}"
         "[data-testid='stButton']>button,[data-testid='stPopover']>button"
         "{white-space:nowrap!important;width:100%!important;justify-content:center!important;"
         "min-height:2.5rem!important;padding:0.35rem 0.55rem!important;}"
-        "[data-testid='column']{padding:0!important;}"
         "</style>"
     )
 
@@ -191,22 +188,22 @@ def _render_position_card(config, pos) -> None:
             if time_md else ""
         )
         c0.markdown(
-            f"{state_str} {bias_emoji} **{pos.bias} {pos.symbol}**<br>"
-            f"<small style='color:#aaa'>{mode_badge}</small>{time_part}",
+            f"<div style='line-height:1.2'>{state_str} {bias_emoji} **{pos.bias} {pos.symbol}**<br>"
+            f"<small style='color:#aaa'>{mode_badge}</small>{time_part}</div>",
             unsafe_allow_html=True,
         )
         c1.markdown(
-            f"<small style='color:#aaa'>Entry</small> **{entry_str}**<br>"
-            f"<small style='color:#e05252'>SL</small> **{pos.stop_loss:.2f}**",
+            f"<div style='line-height:1.2'><small style='color:#aaa'>Entry</small> **{entry_str}**<br>"
+            f"<small style='color:#e05252'>SL</small> **{pos.stop_loss:.2f}**</div>",
             unsafe_allow_html=True,
         )
         c2.markdown(
-            f"<small style='color:#52b788'>TP1</small> **{pos.take_profit_1:.2f}**<br>"
-            f"<small style='color:#52b788'>TP2</small> **{tp2_str}**",
+            f"<div style='line-height:1.2'><small style='color:#52b788'>TP1</small> **{pos.take_profit_1:.2f}**<br>"
+            f"<small style='color:#52b788'>TP2</small> **{tp2_str}**</div>",
             unsafe_allow_html=True,
         )
         c3.markdown(
-            f"<small style='color:#aaa'>P&L</small><br>{pnl_md}",
+            f"<div style='line-height:1.2'><small style='color:#aaa'>P&L</small><br>{pnl_md}</div>",
             unsafe_allow_html=True,
         )
 
@@ -215,16 +212,18 @@ def _render_position_card(config, pos) -> None:
         if pos.state == "FILLED":
             if "tp1" in btn_labels:
                 if btn_cols[i].button("🎯 TP1", key=f"bn_tp1_{pos.id}",
-                                      help=f"Switch exit to TP1 @ {pos.take_profit_1:.2f}"):
+                                      help=f"Switch exit to TP1 @ {pos.take_profit_1:.2f}",
+                                      use_container_width=True):
                     _switch_mode(config, pos.id, "TP1")
                 i += 1
             if "tp2" in btn_labels:
                 if btn_cols[i].button("🎯 TP2", key=f"bn_tp2_{pos.id}",
-                                      help=f"Switch exit to TP2 @ {pos.take_profit_2:.2f}"):
+                                      help=f"Switch exit to TP2 @ {pos.take_profit_2:.2f}",
+                                      use_container_width=True):
                     _switch_mode(config, pos.id, "TP2")
                 i += 1
             # Single Hold button → popover with two sub-options
-            with btn_cols[i].popover("✋"):
+            with btn_cols[i].popover("✋", use_container_width=True):
                 st.markdown("**Choose hold mode**")
                 if st.button(
                     "✋ Hold indefinitely",
@@ -242,15 +241,18 @@ def _render_position_card(config, pos) -> None:
                     _switch_mode(config, pos.id, "HOLD_EXPIRY")
             i += 1
             if btn_cols[i].button("✕", key=f"bn_close_{pos.id}",
-                                  help="Submit market order to close now"):
+                                  help="Submit market order to close now",
+                                  use_container_width=True):
                 _manual_close(config, pos.id)
             i += 1
             if btn_cols[i].button("🧠", key=f"bn_assess_{pos.id}",
-                                  help="Quick AI assessment"):
+                                  help="Quick AI assessment",
+                                  use_container_width=True):
                 _assess_position(config, pos)
         else:
             if btn_cols[0].button("🚫", key=f"bn_cancel_{pos.id}",
-                                  help="Cancel working entry order"):
+                                  help="Cancel working entry order",
+                                  use_container_width=True):
                 _manual_close(config, pos.id)
 
 
