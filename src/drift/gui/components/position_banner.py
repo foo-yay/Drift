@@ -167,19 +167,20 @@ def _render_position_card(config, pos) -> None:
     _BTN_CSS = (
         "<style>[data-testid='stHorizontalBlock']"
         "{gap:6px!important;align-items:flex-start!important;}"
+        "[data-testid='stButton'],[data-testid='stPopover']{width:100%!important;}"
         "[data-testid='stButton']>button,[data-testid='stPopover']>button"
         "{white-space:nowrap!important;width:100%!important;justify-content:flex-start!important;}"
         "</style>"
     )
 
-    button_col_width = 0.9
-    col_widths = [2.2, 1.7, 1.7, 2.0] + [button_col_width] * len(btn_labels)
+    col_widths = [2.2, 1.7, 1.7, 2.0, 2.8]
 
     with st.container(border=True):
         st.markdown(_BTN_CSS, unsafe_allow_html=True)
         cols = st.columns(col_widths, vertical_alignment="top")
-        c0, c1, c2, c3 = cols[0], cols[1], cols[2], cols[3]
-        btn_cols = cols[4:]
+        c0, c1, c2, c3, c4 = cols[0], cols[1], cols[2], cols[3], cols[4]
+        with c4:
+            btn_cols = st.columns(len(btn_labels), gap="small", vertical_alignment="top") if btn_labels else []
 
         time_part = (
             f"&nbsp;&nbsp;<span style='color:#666'>{time_md}</span>"
