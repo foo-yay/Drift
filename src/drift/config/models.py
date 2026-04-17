@@ -139,6 +139,25 @@ class OutputSection(BaseModel):
     streamlit_dashboard: bool
 
 
+class BrokerSection(BaseModel):
+    """Interactive Brokers connection settings.
+
+    IB Gateway must be running (recommended: use IBC for headless auto-login).
+    Paper trading port: 7497  |  Live trading port: 7496.
+    client_id must be unique if multiple processes connect simultaneously.
+    account is your IB account number (e.g. "DU1234567" for paper).
+    """
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = Field(default=7497, ge=1, le=65535)  # 7497=paper, 7496=live
+    client_id: int = Field(default=1, ge=0)
+    account: str = ""
+    order_timeout_seconds: int = Field(default=30, ge=5)
+    approval_expiry_minutes: int = Field(default=15, ge=1)  # reject approval if older than this
+    auto_start_gateway: bool = False  # launch IBC automatically when Gateway is not running
+    gateway_script: str = ""  # absolute path to gatewaystartmacos.sh
+
+
 class AppConfig(BaseModel):
     app: AppSection
     instrument: InstrumentSection
@@ -152,4 +171,5 @@ class AppConfig(BaseModel):
     llm: LLMSection
     storage: StorageSection
     output: OutputSection
+    broker: BrokerSection = Field(default_factory=BrokerSection)
 

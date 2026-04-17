@@ -17,6 +17,7 @@ dependencies = [
   "yfinance>=0.2.50,<1",
   "certifi>=2024.0,<2026",
   "anthropic>=0.95,<2",
+  "ib_insync>=0.9.86,<1",
   "streamlit>=1.35,<2",
   "plotly>=5.22,<6",
 ]

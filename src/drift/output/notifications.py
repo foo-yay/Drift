@@ -8,19 +8,21 @@ from drift.models import TradePlan
 logger = logging.getLogger(__name__)
 
 
-def notify_signal(plan: TradePlan) -> None:
+def notify_signal(plan: TradePlan, *, approval_required: bool = False) -> None:
     """Send a macOS desktop notification when a trade signal fires.
 
     Uses `osascript` — no external dependencies required on macOS.
     Silently skips on non-macOS platforms or if osascript is unavailable.
     """
     direction_emoji = "🟢" if plan.bias == "LONG" else "🔴"
+    action = "⏳ APPROVE in GUI" if approval_required else ""
     title = f"{direction_emoji} Drift Signal — {plan.symbol} {plan.bias}"
     body = (
         f"Entry: {plan.entry_min:.2f}–{plan.entry_max:.2f}  "
         f"Stop: {plan.stop_loss:.2f}  "
         f"TP1: {plan.take_profit_1:.2f}  "
         f"Conf: {plan.confidence}%"
+        + (f"  {action}" if action else "")
     )
     _send(title, body)
 

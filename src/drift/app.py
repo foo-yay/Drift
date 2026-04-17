@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from time import sleep
+
+log = logging.getLogger(__name__)
 
 from drift.ai.client import LLMClient
 from drift.ai.mock_client import MockLLMClient
@@ -31,6 +34,7 @@ from drift.output.notifications import notify_signal
 from drift.planning.trade_plan_builder import TradePlanBuilder
 from drift.storage.logger import EventLogger
 from drift.storage.outcome_resolver import resolve_live_outcomes
+from drift.storage.pending_order_store import PendingOrderStore
 from drift.storage.signal_store import SignalStore
 from drift.storage.watch_store import WatchStore
 
@@ -55,6 +59,9 @@ class DriftApplication:
         )
         self._watch_store: WatchStore | None = (
             WatchStore(sqlite_path) if sqlite_path else None
+        )
+        self._pending_store: PendingOrderStore | None = (
+            PendingOrderStore(sqlite_path) if (sqlite_path and config.broker.enabled) else None
         )
         self._provider = YFinanceProvider()
         self._engine = FeatureEngine(config)
@@ -250,8 +257,30 @@ class DriftApplication:
         self.event_logger.append_event(event)
         render_success(f"trade plan logged to {self.config.storage.jsonl_event_log}")
 
+        # ------------------------------------------------------------------
+        # Broker integration — create a pending order awaiting approval
+        # ------------------------------------------------------------------
+        if self._pending_store is not None and not self._sandbox:
+            signal_key = event.compute_signal_key()
+            self._pending_store.create(
+                signal_key=signal_key,
+                symbol=plan.symbol,
+                bias=plan.bias,
+                setup_type=plan.setup_type,
+                confidence=plan.confidence,
+                entry_min=plan.entry_min,
+                entry_max=plan.entry_max,
+                stop_loss=plan.stop_loss,
+                take_profit_1=plan.take_profit_1,
+                take_profit_2=plan.take_profit_2,
+                thesis=plan.thesis,
+                max_hold_minutes=plan.max_hold_minutes,
+                generated_at=plan.generated_at.isoformat(),
+            )
+            log.info("Pending order created for approval (signal_key=%s)", signal_key)
+
         if self.config.output.desktop_notifications:
-            notify_signal(plan)
+            notify_signal(plan, approval_required=self.config.broker.enabled)
 
         return "TRADE_PLAN_ISSUED"
 
