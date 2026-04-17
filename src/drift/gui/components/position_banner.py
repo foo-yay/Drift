@@ -45,9 +45,7 @@ def _time_display(pos) -> str:
         over = abs(remaining)
         if pos.exit_mode == "MANUAL":
             return f"✋ +{over:.0f}m past window"
-        if pos.exit_mode == "HOLD_EXPIRY":
-            return "⏰ closing..."
-        return f"⚠️ +{over:.0f}m past window"
+        return "⏰ closing..."
     except (ValueError, TypeError):
         return ""
 

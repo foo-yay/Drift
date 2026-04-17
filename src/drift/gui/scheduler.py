@@ -440,17 +440,22 @@ class BackgroundScheduler:
     # ------------------------------------------------------------------
 
     def _position_expiry_loop(self) -> None:
-        """Poll every 60 s; close any HOLD_EXPIRY position that has exceeded max_hold_minutes."""
+        """Poll every 60 s; close any non-MANUAL position that has exceeded max_hold_minutes."""
         time.sleep(30)  # startup delay — let the process settle
         while True:
             try:
-                self._close_expired_hold_positions()
+                self._close_expired_positions()
             except Exception as exc:  # noqa: BLE001
                 log.warning("Position expiry check error: %s", exc)
             time.sleep(60)
 
-    def _close_expired_hold_positions(self) -> None:
-        """Close any FILLED HOLD_EXPIRY positions that have exceeded max_hold_minutes."""
+    def _close_expired_positions(self) -> None:
+        """Close any FILLED position that has exceeded max_hold_minutes.
+
+        MANUAL mode is exempt — the operator explicitly chose to hold
+        indefinitely, so the hold window is informational only.
+        All other modes (TP1, TP2, HOLD_EXPIRY) are auto-closed.
+        """
         from drift.brokers.position_manager import PositionManager
         from drift.gui.state import _PROJECT_ROOT
         from drift.storage.position_store import PositionStore
@@ -466,7 +471,8 @@ class BackgroundScheduler:
 
         now = datetime.now(tz=timezone.utc)
         for pos in open_positions:
-            if pos.exit_mode != "HOLD_EXPIRY" or pos.state != "FILLED":
+            # MANUAL = hold indefinitely; skip it
+            if pos.exit_mode == "MANUAL" or pos.state != "FILLED":
                 continue
             if not pos.fill_time or not pos.max_hold_minutes:
                 continue
@@ -481,17 +487,17 @@ class BackgroundScheduler:
                 continue
 
             log.info(
-                "Position %d HOLD_EXPIRY elapsed (%.0f min >= %d min) — auto-closing",
-                pos.id, elapsed_min, pos.max_hold_minutes,
+                "Position %d %s expired (%.0f min >= %d min) — auto-closing",
+                pos.id, pos.exit_mode, elapsed_min, pos.max_hold_minutes,
             )
             mgr = PositionManager(config, db_path)
             result = mgr.manual_close(pos.id)
             mgr.close()
             if result["status"] == "ok":
-                log.info("Position %d closed at HOLD_EXPIRY timeout", pos.id)
+                log.info("Position %d auto-closed at hold window expiry", pos.id)
             else:
                 log.error(
-                    "Failed to auto-close position %d at HOLD_EXPIRY: %s",
+                    "Failed to auto-close position %d: %s",
                     pos.id, result.get("message"),
                 )
 

@@ -369,10 +369,8 @@ def _render_active_position(config, pos) -> None:
                 time_str = "⏱ 0m"
             elif pos.exit_mode == "MANUAL":
                 time_str = f"✋ +{abs(remaining):.0f}m past window"
-            elif pos.exit_mode == "HOLD_EXPIRY":
-                time_str = "⏰ closing..."
             else:
-                time_str = f"⚠️ +{abs(remaining):.0f}m past window"
+                time_str = "⏰ closing..."
         except (ValueError, TypeError):
             pass
 
