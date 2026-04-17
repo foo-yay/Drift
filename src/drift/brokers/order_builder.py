@@ -12,26 +12,39 @@ Exchange:  CME  |  Currency: USD  |  SecType: FUT
 from __future__ import annotations
 
 import logging
+from datetime import date
 
 from ib_insync import Contract, LimitOrder, Order, StopOrder
 
 log = logging.getLogger(__name__)
 
-# MNQ front-month contract definition.
-# ``lastTradeDateOrContractMonth`` is left blank so IB resolves to the
-# front-month automatically.  The GUI will confirm contract details before
-# placing the first live order.
-_MNQ_CONTRACT = Contract(
-    symbol="MNQ",
-    secType="FUT",
-    exchange="CME",
-    currency="USD",
-)
+
+def _front_month_expiry() -> str:
+    """Return the front-month MNQ quarterly expiry as ``YYYYMM``.
+
+    MNQ quarterly months: Mar (03), Jun (06), Sep (09), Dec (12).
+    Rolls to the next quarter on the 3rd Friday of the expiry month,
+    but we use 1st of the month as a safe roll-over heuristic — IB will
+    resolve within the same month correctly.
+    """
+    today = date.today()
+    quarters = [3, 6, 9, 12]
+    for q in quarters:
+        if today.month < q or (today.month == q and today.day <= 20):
+            return f"{today.year}{q:02d}"
+    # Past December expiry → next year March
+    return f"{today.year + 1}03"
 
 
 def mnq_contract() -> Contract:
     """Return the MNQ front-month futures contract."""
-    return _MNQ_CONTRACT
+    return Contract(
+        symbol="MNQ",
+        secType="FUT",
+        exchange="CME",
+        currency="USD",
+        lastTradeDateOrContractMonth=_front_month_expiry(),
+    )
 
 
 def build_bracket(

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from drift.brokers.position_manager import PositionManager
-from drift.storage.position_store import PositionStore
+from drift.storage.trade_store import TradeStore
 
 
 # ------------------------------------------------------------------
@@ -87,20 +87,22 @@ def test_empty_generated_at_skips_time_check(manager):
 # ------------------------------------------------------------------
 
 def test_duplicate_guard_blocks_second_order(manager, tmp_path):
-    # Seed a WORKING position directly in the store
-    pos_store = PositionStore(tmp_path / "test.db")
-    pos_store.create(
-        pending_order_id=99,
+    # Seed a WORKING trade directly in the store
+    store = TradeStore(tmp_path / "test.db")
+    store.create(
         signal_key="MNQ:LONG:breakout:99",
         symbol="MNQ",
         bias="LONG",
         setup_type="breakout_continuation",
-        entry_limit=19_000.0,
+        entry_min=19_000.0,
+        entry_max=19_000.0,
         stop_loss=18_980.0,
         take_profit_1=19_030.0,
         take_profit_2=19_060.0,
         max_hold_minutes=30,
         thesis="existing",
+        state="WORKING",
+        entry_limit=19_000.0,
     )
     order = _Order(generated_at=_now_iso())
     errors = manager.validate_for_approval(order)

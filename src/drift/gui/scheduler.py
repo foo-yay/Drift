@@ -450,7 +450,7 @@ class BackgroundScheduler:
             time.sleep(60)
 
     def _close_expired_positions(self) -> None:
-        """Close any FILLED position that has exceeded max_hold_minutes.
+        """Close any FILLED trade that has exceeded max_hold_minutes.
 
         MANUAL mode is exempt — the operator explicitly chose to hold
         indefinitely, so the hold window is informational only.
@@ -458,21 +458,21 @@ class BackgroundScheduler:
         """
         from drift.brokers.position_manager import PositionManager
         from drift.gui.state import _PROJECT_ROOT
-        from drift.storage.position_store import PositionStore
+        from drift.storage.trade_store import TradeStore
         from drift.utils.config import load_app_config
 
         config = load_app_config(self._config_path)
         root = _PROJECT_ROOT
         db_path = str(root / config.storage.sqlite_path)
 
-        store = PositionStore(db_path)
-        open_positions = store.get_open()
+        store = TradeStore(db_path)
+        filled_trades = store.get_filled()
         store.close()
 
         now = datetime.now(tz=timezone.utc)
-        for pos in open_positions:
+        for pos in filled_trades:
             # MANUAL = hold indefinitely; skip it
-            if pos.exit_mode == "MANUAL" or pos.state != "FILLED":
+            if pos.exit_mode == "MANUAL":
                 continue
             if not pos.fill_time or not pos.max_hold_minutes:
                 continue
@@ -487,17 +487,17 @@ class BackgroundScheduler:
                 continue
 
             log.info(
-                "Position %d %s expired (%.0f min >= %d min) — auto-closing",
+                "Trade %d %s expired (%.0f min >= %d min) — auto-closing",
                 pos.id, pos.exit_mode, elapsed_min, pos.max_hold_minutes,
             )
             mgr = PositionManager(config, db_path)
             result = mgr.manual_close(pos.id)
             mgr.close()
             if result["status"] == "ok":
-                log.info("Position %d auto-closed at hold window expiry", pos.id)
+                log.info("Trade %d auto-closed at hold window expiry", pos.id)
             else:
                 log.error(
-                    "Failed to auto-close position %d: %s",
+                    "Failed to auto-close trade %d: %s",
                     pos.id, result.get("message"),
                 )
 
