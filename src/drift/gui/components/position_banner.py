@@ -172,7 +172,7 @@ def _render_position_card(config, pos) -> None:
         "{white-space:nowrap!important;}</style>"
     )
 
-    col_widths = [2, 3, 2] + [1.0] * len(btn_labels)
+    col_widths = [2, 3, 1.2] + [0.65] * len(btn_labels)
 
     with st.container(border=True):
         st.markdown(_BTN_CSS, unsafe_allow_html=True)
@@ -208,17 +208,17 @@ def _render_position_card(config, pos) -> None:
         i = 0
         if pos.state == "FILLED":
             if "tp1" in btn_labels:
-                if btn_cols[i].button("→TP1", key=f"bn_tp1_{pos.id}",
+                if btn_cols[i].button("🎯 TP1", key=f"bn_tp1_{pos.id}",
                                       help=f"Switch exit to TP1 @ {pos.take_profit_1:.2f}"):
                     _switch_mode(config, pos.id, "TP1")
                 i += 1
             if "tp2" in btn_labels:
-                if btn_cols[i].button("→TP2", key=f"bn_tp2_{pos.id}",
+                if btn_cols[i].button("🎯 TP2", key=f"bn_tp2_{pos.id}",
                                       help=f"Switch exit to TP2 @ {pos.take_profit_2:.2f}"):
                     _switch_mode(config, pos.id, "TP2")
                 i += 1
             # Single Hold button → popover with two sub-options
-            with btn_cols[i].popover("✋ Hold"):
+            with btn_cols[i].popover("✋"):
                 st.markdown("**Choose hold mode**")
                 if st.button(
                     "✋ Hold indefinitely",
@@ -235,14 +235,15 @@ def _render_position_card(config, pos) -> None:
                 ):
                     _switch_mode(config, pos.id, "HOLD_EXPIRY")
             i += 1
-            if btn_cols[i].button("✕ Close", key=f"bn_close_{pos.id}",
+            if btn_cols[i].button("✕", key=f"bn_close_{pos.id}",
                                   help="Submit market order to close now"):
                 _manual_close(config, pos.id)
             i += 1
-            if btn_cols[i].button("🧠 Assess", key=f"bn_assess_{pos.id}"):
+            if btn_cols[i].button("🧠", key=f"bn_assess_{pos.id}",
+                                  help="Quick AI assessment"):
                 _assess_position(config, pos)
         else:
-            if btn_cols[0].button("🚫 Cancel", key=f"bn_cancel_{pos.id}",
+            if btn_cols[0].button("🚫", key=f"bn_cancel_{pos.id}",
                                   help="Cancel working entry order"):
                 _manual_close(config, pos.id)
 
