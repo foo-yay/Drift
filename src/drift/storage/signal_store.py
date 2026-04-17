@@ -425,7 +425,14 @@ class SignalStore:
             trade_plans_only=True,
             limit=100_000,
         )
-        resolved = [r for r in rows if r.replay_outcome is not None]
+        # "Resolved" means the trade was actually filled and reached an outcome.
+        # ENTRY_MISSED and EXPIRED_NO_FILL are excluded — price never entered the
+        # zone, so there was no real trade to count as a win, loss, or PnL event.
+        _NON_FILLS = {"ENTRY_MISSED", "EXPIRED_NO_FILL"}
+        resolved = [
+            r for r in rows
+            if r.replay_outcome is not None and r.replay_outcome not in _NON_FILLS
+        ]
         wins = [r for r in resolved if r.replay_outcome in ("TP1_HIT", "TP2_HIT")]
         total_pnl = sum(r.pnl_points or 0.0 for r in resolved)
         decisive = [r for r in resolved if r.replay_outcome in ("TP1_HIT", "TP2_HIT", "STOP_HIT")]
