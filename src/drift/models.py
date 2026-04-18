@@ -182,3 +182,29 @@ class SignalEvent(BaseModel):
             return self
         return self.model_copy(update={"signal_key": self.compute_signal_key()})
 
+
+class AssessmentRecommendation(BaseModel):
+    """Structured LLM assessment for an active or working position.
+
+    The LLM returns one of three actions:
+        HOLD   — keep current settings, no changes recommended
+        ADJUST — modify one or more parameters (SL, TP, entry, hold window)
+        CLOSE  — close the position / cancel the order immediately
+
+    Fields set to ``None`` mean "no change recommended."
+    """
+
+    action: Literal["HOLD", "ADJUST", "CLOSE"]
+    confidence: int = Field(ge=0, le=100)
+    rationale: str
+
+    # Recommended parameter changes (None = no change)
+    new_stop_loss: float | None = None
+    new_take_profit_1: float | None = None
+    new_take_profit_2: float | None = None
+    new_entry_limit: float | None = None       # WORKING state only
+    new_max_hold_minutes: int | None = None
+    recommended_exit_mode: Literal["TP1", "TP2", "MANUAL", "HOLD_EXPIRY"] | None = None
+
+    risk_flags: list[str] = Field(default_factory=list)
+

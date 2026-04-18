@@ -80,6 +80,23 @@ CREATE INDEX IF NOT EXISTS idx_trades_created ON trades(created_at);
 CREATE INDEX IF NOT EXISTS idx_trades_source ON trades(source);
 """
 
+_ASSESSMENTS_DDL = """
+CREATE TABLE IF NOT EXISTS assessments (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id         INTEGER NOT NULL,
+    action           TEXT NOT NULL,          -- HOLD | ADJUST | CLOSE
+    confidence       INTEGER NOT NULL DEFAULT 0,
+    rationale        TEXT NOT NULL DEFAULT '',
+    recommendation   TEXT NOT NULL DEFAULT '{}',  -- full JSON blob
+    applied          INTEGER NOT NULL DEFAULT 0,  -- 0=pending, 1=applied, -1=dismissed
+    created_at       TEXT NOT NULL,
+
+    FOREIGN KEY (trade_id) REFERENCES trades(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_assessments_trade ON assessments(trade_id);
+"""
+
 
 @dataclass
 class TradeRow:
@@ -136,6 +153,7 @@ class TradeStore:
         )
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_DDL)
+        self._conn.executescript(_ASSESSMENTS_DDL)
 
     # ------------------------------------------------------------------
     # Create
@@ -380,6 +398,110 @@ class TradeStore:
             (limit,),
         ).fetchall()
         return [_row(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Trade parameter updates (for assessment apply)
+    # ------------------------------------------------------------------
+
+    def update_stop_loss(self, row_id: int, new_sl: float, sl_order_id: int | None = None) -> None:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        self._conn.execute(
+            """
+            UPDATE trades
+            SET stop_loss=?, sl_order_id=COALESCE(?,sl_order_id), updated_at=?
+            WHERE id=?
+            """,
+            (new_sl, sl_order_id, now, row_id),
+        )
+
+    def update_take_profits(
+        self,
+        row_id: int,
+        tp1: float | None = None,
+        tp2: float | None = None,
+        tp_order_id: int | None = None,
+    ) -> None:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        self._conn.execute(
+            """
+            UPDATE trades
+            SET take_profit_1=COALESCE(?,take_profit_1),
+                take_profit_2=COALESCE(?,take_profit_2),
+                tp_order_id=COALESCE(?,tp_order_id),
+                updated_at=?
+            WHERE id=?
+            """,
+            (tp1, tp2, tp_order_id, now, row_id),
+        )
+
+    def update_entry_limit(
+        self,
+        row_id: int,
+        new_entry: float,
+        parent_order_id: int | None = None,
+        tp_order_id: int | None = None,
+        sl_order_id: int | None = None,
+        ib_perm_id: int | None = None,
+    ) -> None:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        self._conn.execute(
+            """
+            UPDATE trades
+            SET entry_limit=?,
+                parent_order_id=COALESCE(?,parent_order_id),
+                tp_order_id=COALESCE(?,tp_order_id),
+                sl_order_id=COALESCE(?,sl_order_id),
+                ib_perm_id=COALESCE(?,ib_perm_id),
+                updated_at=?
+            WHERE id=? AND state='WORKING'
+            """,
+            (new_entry, parent_order_id, tp_order_id, sl_order_id, ib_perm_id, now, row_id),
+        )
+
+    def update_hold_window(self, row_id: int, new_minutes: int) -> None:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        self._conn.execute(
+            "UPDATE trades SET max_hold_minutes=?, updated_at=? WHERE id=?",
+            (new_minutes, now, row_id),
+        )
+
+    # ------------------------------------------------------------------
+    # Assessments log
+    # ------------------------------------------------------------------
+
+    def log_assessment(
+        self,
+        trade_id: int,
+        action: str,
+        confidence: int,
+        rationale: str,
+        recommendation_json: str,
+    ) -> int:
+        """Store an assessment record.  Returns the assessment id."""
+        now = datetime.now(tz=timezone.utc).isoformat()
+        cur = self._conn.execute(
+            """
+            INSERT INTO assessments (trade_id, action, confidence, rationale, recommendation, created_at)
+            VALUES (?,?,?,?,?,?)
+            """,
+            (trade_id, action, confidence, rationale, recommendation_json, now),
+        )
+        return cur.lastrowid or 0
+
+    def mark_assessment_applied(self, assessment_id: int, applied: int = 1) -> None:
+        """Mark an assessment as applied (1) or dismissed (-1)."""
+        self._conn.execute(
+            "UPDATE assessments SET applied=? WHERE id=?",
+            (applied, assessment_id),
+        )
+
+    def get_assessments(self, trade_id: int, limit: int = 10) -> list[dict]:
+        """Return recent assessments for a trade, newest first."""
+        rows = self._conn.execute(
+            "SELECT * FROM assessments WHERE trade_id=? ORDER BY created_at DESC LIMIT ?",
+            (trade_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def close(self) -> None:
         self._conn.close()

@@ -358,6 +358,19 @@ class IBClient:
 
         try:
             exit_action = "SELL" if bias.upper() == "LONG" else "BUY"
+
+            # Cancel any working orders on the exit side first to avoid
+            # hitting IB's 15-order-per-side limit.
+            open_orders = ib.openOrders()
+            for o in open_orders:
+                if getattr(o, "action", None) == exit_action:
+                    try:
+                        ib.cancelOrder(o)
+                    except Exception:  # noqa: BLE001
+                        pass
+            if open_orders:
+                ib.sleep(1)
+
             close_order = MarketOrder(
                 action=exit_action,
                 totalQuantity=quantity,
@@ -382,6 +395,175 @@ class IBClient:
             }
         except Exception as exc:  # noqa: BLE001
             log.exception("Close position failed: %s", exc)
+            return {"status": "error", "message": str(exc)}
+        finally:
+            try:
+                ib.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+
+    # ------------------------------------------------------------------
+    # Cancel all orders (cleanup)
+    # ------------------------------------------------------------------
+
+    def cancel_all_orders(self) -> dict[str, Any]:
+        """Cancel ALL open orders for MNQ.  Use to clean up orphaned orders."""
+        try:
+            ib, _ = self._connect()
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "error", "message": f"Connection failed: {exc}"}
+
+        try:
+            open_orders = ib.openOrders()
+            cancelled = 0
+            for o in open_orders:
+                try:
+                    ib.cancelOrder(o)
+                    cancelled += 1
+                except Exception:  # noqa: BLE001
+                    pass
+            ib.sleep(1)
+            log.info("Cancelled %d open orders", cancelled)
+            return {"status": "ok", "cancelled": cancelled}
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "error", "message": str(exc)}
+        finally:
+            try:
+                ib.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+
+    # ------------------------------------------------------------------
+    # SL modification
+    # ------------------------------------------------------------------
+
+    def modify_sl(
+        self,
+        old_sl_order_id: int,
+        new_sl_price: float,
+        bias: str,
+        parent_order_id: int,
+        quantity: int = 1,
+    ) -> dict[str, Any]:
+        """Cancel the current SL order and place a new one at new_sl_price.
+
+        Returns {"status": "ok", "sl_order_id": <new>} or error.
+        """
+        try:
+            ib, contract = self._connect()
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "error", "message": f"Connection failed: {exc}"}
+
+        try:
+            from ib_insync import StopOrder
+
+            # Cancel old SL
+            open_orders = ib.openOrders()
+            old_sl = next((o for o in open_orders if o.orderId == old_sl_order_id), None)
+            if old_sl:
+                ib.cancelOrder(old_sl)
+                ib.sleep(1)
+                log.info("Cancelled old SL order %d", old_sl_order_id)
+            else:
+                log.warning("Old SL order %d not found — may already be filled/cancelled", old_sl_order_id)
+
+            # Place new SL
+            exit_action = "SELL" if bias.upper() == "LONG" else "BUY"
+            new_sl = StopOrder(
+                action=exit_action,
+                totalQuantity=quantity,
+                auxPrice=round(new_sl_price, 2),
+                account=self._cfg.account,
+                parentId=parent_order_id,
+                transmit=True,
+            )
+            sl_trade = ib.placeOrder(contract, new_sl)
+            ib.sleep(1)
+
+            log.info("New SL order placed: id=%d price=%.2f", sl_trade.order.orderId, new_sl_price)
+            return {"status": "ok", "sl_order_id": sl_trade.order.orderId}
+
+        except Exception as exc:  # noqa: BLE001
+            log.exception("SL modification failed: %s", exc)
+            return {"status": "error", "message": str(exc)}
+        finally:
+            try:
+                ib.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+
+    # ------------------------------------------------------------------
+    # Entry limit modification (WORKING orders only)
+    # ------------------------------------------------------------------
+
+    def modify_entry(
+        self,
+        old_parent_order_id: int,
+        new_entry_price: float,
+        bias: str,
+        stop_loss: float,
+        take_profit: float,
+        quantity: int = 1,
+    ) -> dict[str, Any]:
+        """Cancel the current bracket and place a new one at a different entry price.
+
+        This is a full bracket replace — all three orders (entry + TP + SL) are
+        cancelled and re-placed.  Only valid for WORKING (unfilled) orders.
+
+        Returns {"status": "ok", "order_id": ..., "tp_order_id": ..., "sl_order_id": ..., "perm_id": ...}
+        or error.
+        """
+        try:
+            ib, contract = self._connect()
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "error", "message": f"Connection failed: {exc}"}
+
+        try:
+            from drift.brokers.order_builder import build_bracket
+
+            # Cancel old bracket
+            open_orders = ib.openOrders()
+            bracket_orders = [
+                o for o in open_orders
+                if o.orderId == old_parent_order_id
+                or getattr(o, "parentId", None) == old_parent_order_id
+            ]
+            for o in bracket_orders:
+                ib.cancelOrder(o)
+            ib.sleep(1)
+            log.info("Cancelled old bracket (parent=%d, %d orders)", old_parent_order_id, len(bracket_orders))
+
+            # Place new bracket
+            parent, tp_child, sl_child = build_bracket(
+                bias=bias,
+                entry_limit=new_entry_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                quantity=quantity,
+                account=self._cfg.account,
+            )
+            parent_trade = ib.placeOrder(contract, parent)
+            tp_child.parentId = parent_trade.order.orderId
+            sl_child.parentId = parent_trade.order.orderId
+            tp_trade = ib.placeOrder(contract, tp_child)
+            sl_trade = ib.placeOrder(contract, sl_child)
+            ib.sleep(1)
+
+            log.info(
+                "New bracket placed: parent=%d tp=%d sl=%d entry=%.2f",
+                parent_trade.order.orderId, tp_trade.order.orderId,
+                sl_trade.order.orderId, new_entry_price,
+            )
+            return {
+                "status": "ok",
+                "order_id": parent_trade.order.orderId,
+                "perm_id": parent_trade.order.permId,
+                "tp_order_id": tp_trade.order.orderId,
+                "sl_order_id": sl_trade.order.orderId,
+            }
+
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Entry modification failed: %s", exc)
             return {"status": "error", "message": str(exc)}
         finally:
             try:

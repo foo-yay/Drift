@@ -149,3 +149,85 @@ def test_price_at_entry_max_boundary_ok(manager):
     order = _Order()
     warnings = manager.check_price_validity(order, current_price=order.entry_max)
     assert warnings == []
+
+
+# ------------------------------------------------------------------
+# apply_assessment — hold (no-op)
+# ------------------------------------------------------------------
+
+def _seed_filled_trade(tmp_path, manager):
+    """Seed a FILLED trade and return its id."""
+    store = TradeStore(tmp_path / "test.db")
+    tid = store.create(
+        signal_key="MNQ:LONG:pullback:assess1",
+        symbol="MNQ",
+        bias="LONG",
+        setup_type="pullback_continuation",
+        entry_min=19_000.0,
+        entry_max=19_010.0,
+        stop_loss=18_975.0,
+        take_profit_1=19_040.0,
+        take_profit_2=19_070.0,
+        max_hold_minutes=60,
+        thesis="test",
+        state="FILLED",
+        entry_limit=19_005.0,
+        parent_order_id=100,
+        tp_order_id=101,
+        sl_order_id=102,
+    )
+    store.mark_filled(tid, 19_005.0)
+    return tid
+
+
+def test_apply_hold_no_changes(manager, tmp_path):
+    from drift.models import AssessmentRecommendation
+
+    tid = _seed_filled_trade(tmp_path, manager)
+    rec = AssessmentRecommendation(action="HOLD", confidence=80, rationale="All good.")
+    result = manager.apply_assessment(tid, rec)
+    assert result["status"] == "ok"
+    assert "No parameter changes" in result["changes"][0]
+
+
+def test_apply_hold_window_update(manager, tmp_path):
+    from drift.models import AssessmentRecommendation
+
+    tid = _seed_filled_trade(tmp_path, manager)
+    rec = AssessmentRecommendation(
+        action="ADJUST", confidence=70, rationale="Extend hold.",
+        new_max_hold_minutes=90,
+    )
+    result = manager.apply_assessment(tid, rec)
+    assert result["status"] == "ok"
+    assert any("Hold" in c for c in result["changes"])
+    pos = manager.get_position(tid)
+    assert pos.max_hold_minutes == 90
+
+
+def test_apply_to_closed_position_errors(manager, tmp_path):
+    from drift.models import AssessmentRecommendation
+
+    store = TradeStore(tmp_path / "test.db")
+    tid = store.create(
+        signal_key="MNQ:LONG:pullback:assess_closed",
+        symbol="MNQ", bias="LONG", setup_type="pb",
+        entry_min=19_000.0, entry_max=19_010.0,
+        stop_loss=18_975.0, take_profit_1=19_040.0,
+        take_profit_2=19_070.0, thesis="test",
+    )
+    store.close_trade(tid, "CLOSED_MANUAL")
+
+    rec = AssessmentRecommendation(action="HOLD", confidence=80, rationale="x")
+    result = manager.apply_assessment(tid, rec)
+    assert result["status"] == "error"
+
+
+def test_log_and_dismiss_assessment(manager, tmp_path):
+    from drift.models import AssessmentRecommendation
+
+    tid = _seed_filled_trade(tmp_path, manager)
+    rec = AssessmentRecommendation(action="HOLD", confidence=80, rationale="Good.")
+    aid = manager.log_assessment(tid, rec)
+    assert aid >= 1
+    manager.dismiss_assessment(aid)

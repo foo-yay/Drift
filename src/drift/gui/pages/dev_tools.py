@@ -33,9 +33,10 @@ def _seed_filled_position(config, bias: str = "LONG") -> str:
         "SHORT": dict(entry=19_848.0, sl=19_880.0, tp1=19_795.0, tp2=19_755.0),
     }[bias]
 
+    ts = int(datetime.now(tz=timezone.utc).timestamp())
     store = TradeStore(_db_path(config))
     trade_id = store.create(
-        signal_key=f"MNQ:{bias}:pullback_continuation:DEVTEST",
+        signal_key=f"MNQ:{bias}:pullback_continuation:DEV:{ts}",
         symbol="MNQ",
         bias=bias,
         setup_type="pullback_continuation",
@@ -79,9 +80,10 @@ def _seed_pending_order(config, bias: str = "LONG") -> str:
             setup_type="failed_breakout_reversion",
         )
 
+    ts = int(datetime.now(tz=timezone.utc).timestamp())
     store = TradeStore(_db_path(config))
     store.create(
-        signal_key=f"MNQ:{bias}:{row['setup_type']}:DEVTEST",
+        signal_key=f"MNQ:{bias}:{row['setup_type']}:DEV:{ts}",
         symbol="MNQ",
         bias=bias,
         setup_type=row["setup_type"],
@@ -112,9 +114,10 @@ def _seed_working_position(config, bias: str = "LONG") -> str:
         "SHORT": dict(entry=19_848.0, sl=19_880.0, tp1=19_795.0, tp2=19_755.0),
     }[bias]
 
+    ts = int(datetime.now(tz=timezone.utc).timestamp())
     store = TradeStore(_db_path(config))
     trade_id = store.create(
-        signal_key=f"MNQ:{bias}:breakout_continuation:DEVTEST",
+        signal_key=f"MNQ:{bias}:breakout_continuation:DEV:{ts}",
         symbol="MNQ",
         bias=bias,
         setup_type="breakout_continuation",
@@ -176,9 +179,10 @@ def _fire_real_bracket(config, bias: str) -> dict:
         return result
 
     # Record in trade store so fill-detection and banner pick it up
+    ts = int(datetime.now(tz=timezone.utc).timestamp())
     store = TradeStore(_db_path(config))
     trade_id = store.create(
-        signal_key=f"MNQ:{bias}:ib_bracket_test:DEVTEST",
+        signal_key=f"MNQ:{bias}:ib_bracket_test:DEV:{ts}",
         symbol="MNQ",
         bias=bias,
         setup_type="ib_bracket_test",
@@ -207,7 +211,7 @@ def _clear_test_data(config) -> str:
     import sqlite3
     conn = sqlite3.connect(_db_path(config))
     n = conn.execute(
-        "DELETE FROM trades WHERE signal_key LIKE '%DEVTEST%'"
+        "DELETE FROM trades WHERE signal_key LIKE '%DEV:%' OR signal_key LIKE '%DEVTEST%'"
     ).rowcount
     conn.commit()
     conn.close()
@@ -299,7 +303,7 @@ def page() -> None:
 
     rows = conn.execute(
         "SELECT id, bias, state, exit_mode, source, signal_key FROM trades "
-        "WHERE signal_key LIKE '%DEVTEST%' ORDER BY created_at DESC"
+        "WHERE signal_key LIKE '%DEV:%' OR signal_key LIKE '%DEVTEST%' ORDER BY created_at DESC"
     ).fetchall()
     conn.close()
 

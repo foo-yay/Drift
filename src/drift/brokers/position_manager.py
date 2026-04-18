@@ -216,6 +216,16 @@ class PositionManager:
         if not pos or pos.state not in ("WORKING", "FILLED"):
             return {"status": "error", "message": "Position not found or already closed."}
 
+        # Dev/sandbox trades have no real IB orders — just update the DB
+        if pos.source in ("dev", "sandbox"):
+            close_state = "CLOSED_CANCEL" if pos.state == "WORKING" else "CLOSED_MANUAL"
+            self._trades.close_trade(
+                position_id, close_state,
+                exit_reason=f"Operator closed ({pos.source} trade — no IB orders)",
+            )
+            log.info("Trade %d (%s) closed locally — no IB interaction", position_id, pos.source)
+            return {"status": "ok"}
+
         client = IBClient(self._cfg.broker)
 
         if pos.state == "WORKING":
@@ -226,7 +236,16 @@ class PositionManager:
             self._trades.close_trade(position_id, "CLOSED_CANCEL", exit_reason="Operator cancelled before fill")
             return result
 
-        # FILLED — close with market order
+        # FILLED — cancel SL/TP first, then close with market order
+        if pos.parent_order_id:
+            client.cancel_bracket(pos.parent_order_id)
+        else:
+            # No parent ID — cancel individually
+            if pos.tp_order_id:
+                client.cancel_tp(pos.tp_order_id)
+            if pos.sl_order_id:
+                client.cancel_tp(pos.sl_order_id)  # cancel_tp works for any order
+
         result = client.close_position(pos.bias, pos.quantity)
         if result["status"] == "ok":
             self._trades.close_trade(
@@ -322,6 +341,172 @@ class PositionManager:
 
     def get_position_history(self, limit: int = 50):
         return self._trades.get_history(limit)
+
+    # ------------------------------------------------------------------
+    # Assessment apply
+    # ------------------------------------------------------------------
+
+    def apply_assessment(self, position_id: int, rec) -> dict[str, Any]:
+        """Apply an ``AssessmentRecommendation`` to an active trade.
+
+        Handles all mutable parameters: SL, TP1, TP2, entry limit,
+        hold window, and exit mode.  For CLOSE recommendations, delegates
+        to ``manual_close``.
+
+        Returns {"status": "ok", "changes": [...]} or error.
+        """
+        from drift.brokers.ib_client import IBClient
+
+        pos = self._trades.get_by_id(position_id)
+        if not pos or pos.state not in ("WORKING", "FILLED"):
+            return {"status": "error", "message": "Position not found or already closed."}
+
+        # CLOSE action — just close/cancel
+        if rec.action == "CLOSE":
+            return self.manual_close(position_id)
+
+        changes: list[str] = []
+        client = IBClient(self._cfg.broker)
+
+        # ---- Stop loss ----
+        if rec.new_stop_loss is not None and rec.new_stop_loss != pos.stop_loss:
+            if pos.state == "FILLED" and pos.sl_order_id:
+                result = client.modify_sl(
+                    old_sl_order_id=pos.sl_order_id,
+                    new_sl_price=rec.new_stop_loss,
+                    bias=pos.bias,
+                    parent_order_id=pos.parent_order_id or 0,
+                    quantity=pos.quantity,
+                )
+                if result["status"] != "ok":
+                    return result
+                self._trades.update_stop_loss(
+                    position_id, rec.new_stop_loss,
+                    sl_order_id=result.get("sl_order_id"),
+                )
+                changes.append(f"SL {pos.stop_loss:.2f} → {rec.new_stop_loss:.2f}")
+            elif pos.state == "WORKING":
+                # For WORKING orders, entry modification replaces the whole bracket
+                # SL will be applied as part of entry modification below
+                self._trades.update_stop_loss(position_id, rec.new_stop_loss)
+                changes.append(f"SL {pos.stop_loss:.2f} → {rec.new_stop_loss:.2f}")
+
+        # ---- Take profits ----
+        tp_changed = False
+        new_tp1 = rec.new_take_profit_1
+        new_tp2 = rec.new_take_profit_2
+        if new_tp1 is not None and new_tp1 != pos.take_profit_1:
+            tp_changed = True
+        if new_tp2 is not None and new_tp2 != pos.take_profit_2:
+            tp_changed = True
+
+        if tp_changed and pos.state == "FILLED":
+            # If the active TP is the one being changed, modify on IB
+            active_tp_changing = (
+                (pos.exit_mode == "TP1" and new_tp1 is not None)
+                or (pos.exit_mode == "TP2" and new_tp2 is not None)
+            )
+            if active_tp_changing and pos.tp_order_id:
+                new_active = new_tp1 if pos.exit_mode == "TP1" else new_tp2
+                result = client.modify_tp(
+                    old_tp_order_id=pos.tp_order_id,
+                    new_tp_price=new_active,
+                    bias=pos.bias,
+                    parent_order_id=pos.parent_order_id or 0,
+                    quantity=pos.quantity,
+                )
+                if result["status"] != "ok":
+                    return result
+                self._trades.update_take_profits(
+                    position_id, tp1=new_tp1, tp2=new_tp2,
+                    tp_order_id=result.get("tp_order_id"),
+                )
+                self._trades.set_exit_mode(
+                    position_id, pos.exit_mode, new_active,
+                    tp_order_id=result.get("tp_order_id"),
+                )
+            else:
+                # Not the active TP — just update the stored values
+                self._trades.update_take_profits(position_id, tp1=new_tp1, tp2=new_tp2)
+
+            if new_tp1 is not None:
+                changes.append(f"TP1 {pos.take_profit_1:.2f} → {new_tp1:.2f}")
+            if new_tp2 is not None:
+                old_tp2 = f"{pos.take_profit_2:.2f}" if pos.take_profit_2 else "—"
+                changes.append(f"TP2 {old_tp2} → {new_tp2:.2f}")
+
+        elif tp_changed and pos.state == "WORKING":
+            # Stored only — bracket will be replaced if entry changes too
+            self._trades.update_take_profits(position_id, tp1=new_tp1, tp2=new_tp2)
+            if new_tp1 is not None:
+                changes.append(f"TP1 {pos.take_profit_1:.2f} → {new_tp1:.2f}")
+            if new_tp2 is not None:
+                old_tp2 = f"{pos.take_profit_2:.2f}" if pos.take_profit_2 else "—"
+                changes.append(f"TP2 {old_tp2} → {new_tp2:.2f}")
+
+        # ---- Entry limit (WORKING only) ----
+        if rec.new_entry_limit is not None and pos.state == "WORKING":
+            if rec.new_entry_limit != pos.entry_limit:
+                # Re-read pos to get any SL/TP changes already applied above
+                updated_pos = self._trades.get_by_id(position_id)
+                result = client.modify_entry(
+                    old_parent_order_id=pos.parent_order_id or 0,
+                    new_entry_price=rec.new_entry_limit,
+                    bias=pos.bias,
+                    stop_loss=updated_pos.stop_loss,
+                    take_profit=updated_pos.take_profit_1,
+                    quantity=pos.quantity,
+                )
+                if result["status"] != "ok":
+                    return result
+                self._trades.update_entry_limit(
+                    position_id, rec.new_entry_limit,
+                    parent_order_id=result.get("order_id"),
+                    tp_order_id=result.get("tp_order_id"),
+                    sl_order_id=result.get("sl_order_id"),
+                    ib_perm_id=result.get("perm_id"),
+                )
+                old_entry = f"{pos.entry_limit:.2f}" if pos.entry_limit else "—"
+                changes.append(f"Entry {old_entry} → {rec.new_entry_limit:.2f}")
+
+        # ---- Hold window ----
+        if rec.new_max_hold_minutes is not None and rec.new_max_hold_minutes != pos.max_hold_minutes:
+            self._trades.update_hold_window(position_id, rec.new_max_hold_minutes)
+            changes.append(f"Hold {pos.max_hold_minutes}m → {rec.new_max_hold_minutes}m")
+
+        # ---- Exit mode ----
+        if rec.recommended_exit_mode and rec.recommended_exit_mode != pos.exit_mode:
+            if pos.state == "FILLED":
+                mode_result = self.switch_exit_mode(position_id, rec.recommended_exit_mode)
+                if mode_result["status"] != "ok":
+                    return mode_result
+                changes.append(f"Mode {pos.exit_mode} → {rec.recommended_exit_mode}")
+
+        if not changes:
+            changes.append("No parameter changes (HOLD)")
+
+        log.info("Assessment applied to trade %d: %s", position_id, ", ".join(changes))
+        return {"status": "ok", "changes": changes}
+
+    def log_assessment(self, trade_id: int, rec) -> int:
+        """Persist an assessment recommendation.  Returns the assessment id."""
+        import json
+        rec_json = json.dumps(rec.model_dump(), default=str)
+        return self._trades.log_assessment(
+            trade_id=trade_id,
+            action=rec.action,
+            confidence=rec.confidence,
+            rationale=rec.rationale,
+            recommendation_json=rec_json,
+        )
+
+    def dismiss_assessment(self, assessment_id: int) -> None:
+        """Mark an assessment as dismissed (not applied)."""
+        self._trades.mark_assessment_applied(assessment_id, applied=-1)
+
+    def mark_assessment_applied(self, assessment_id: int) -> None:
+        """Mark an assessment as applied."""
+        self._trades.mark_assessment_applied(assessment_id, applied=1)
 
     def close(self) -> None:
         self._trades.close()

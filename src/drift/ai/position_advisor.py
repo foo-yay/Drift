@@ -1,52 +1,91 @@
-"""Position advisor — on-demand LLM assessment for active positions.
+"""Position advisor — structured LLM assessment for active positions.
 
-Runs a separate, lightweight LLM query that evaluates the current state of an
-open position (entry fill, current P&L, SL/TP levels, elapsed time) and
-returns an advisory recommendation.  This does NOT affect the main signal
-pipeline — it's a pure read-only assessment.
+Runs a separate LLM query that evaluates the current state of an open or
+working position and returns a structured ``AssessmentRecommendation`` with
+concrete parameter changes the operator can approve and apply.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import re
+from pathlib import Path
 from typing import Any
+
+from drift.models import AssessmentRecommendation
 
 log = logging.getLogger(__name__)
 
-_ASSESS_SYSTEM_PROMPT = """\
+# Fallback prompt used when prompts.yaml doesn't have assess_system_prompt
+_DEFAULT_SYSTEM_PROMPT = """\
 You are a trade position advisor for MNQ (Micro E-mini Nasdaq-100 Futures).
-
-You are evaluating an ACTIVE position.  The operator wants your assessment of
-whether to hold, move the take-profit target, or close.  You are advisory only —
-the operator makes the final decision.
-
-Respond in 2-3 concise sentences.  Include:
-1. Whether current conditions favor continuing to hold or closing
-2. Whether the current exit mode (TP1/TP2/Manual) is appropriate
-3. Any specific risk you see (e.g. approaching resistance, momentum fading)
-
-Be direct and actionable.  No disclaimers, no hedging.
+Evaluate the position and return a JSON object with keys:
+action ("HOLD"|"ADJUST"|"CLOSE"), confidence (0-100), rationale (string),
+new_stop_loss, new_take_profit_1, new_take_profit_2, new_entry_limit,
+new_max_hold_minutes, recommended_exit_mode, risk_flags (list of strings).
+Set unchanged fields to null.  Be direct.  No disclaimers.
 """
 
+_HOLD_FALLBACK = AssessmentRecommendation(
+    action="HOLD",
+    confidence=0,
+    rationale="Assessment unavailable — defaulting to HOLD.",
+)
 
-def assess_position(config: Any, pos: Any) -> str:
-    """Run a quick LLM assessment for an active position.
+
+def _load_system_prompt(config: Any) -> str:
+    """Load the assess system prompt from prompts.yaml, with fallback."""
+    try:
+        import yaml
+
+        prompts_path = Path("config/prompts.yaml")
+        if prompts_path.exists():
+            data = yaml.safe_load(prompts_path.read_text())
+            if data and "assess_system_prompt" in data:
+                return data["assess_system_prompt"]
+    except Exception:  # noqa: BLE001
+        pass
+    return _DEFAULT_SYSTEM_PROMPT
+
+
+def _extract_json(text: str) -> dict:
+    """Extract JSON object from LLM response text."""
+    fence = re.search(r"```(?:json)?\s*\n(.*?)```", text, re.DOTALL)
+    if fence:
+        candidate = fence.group(1).strip()
+        start = candidate.find("{")
+        end = candidate.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(candidate[start : end + 1])
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end > start:
+        return json.loads(text[start : end + 1])
+
+    raise ValueError("No JSON object found in LLM response")
+
+
+def assess_position(config: Any, pos: Any) -> AssessmentRecommendation:
+    """Run a structured LLM assessment for a position.
 
     Args:
         config: AppConfig
-        pos: ActivePositionRow
+        pos: TradeRow (WORKING or FILLED)
 
     Returns:
-        Advisory text from the LLM.
+        AssessmentRecommendation with action + recommended changes.
     """
     import anthropic
 
     api_key = os.environ.get(config.llm.api_key_env, "")
     if not api_key:
-        return "LLM API key not configured — cannot assess."
+        return _HOLD_FALLBACK.model_copy(
+            update={"rationale": "LLM API key not configured — cannot assess."},
+        )
 
-    # Fetch current price for context
+    # Fetch current price
     current_price = None
     try:
         from drift.data.providers.yfinance_provider import YFinanceProvider
@@ -54,16 +93,20 @@ def assess_position(config: Any, pos: Any) -> str:
     except Exception:  # noqa: BLE001
         pass
 
-    # Build the position context
+    # P&L calculation (FILLED only)
     pnl_pts = None
-    if pos.entry_fill and current_price:
-        pnl_pts = (current_price - pos.entry_fill) if pos.bias == "LONG" else (pos.entry_fill - current_price)
+    entry_ref = pos.entry_fill or pos.entry_limit
+    if entry_ref and current_price:
+        pnl_pts = (current_price - entry_ref) if pos.bias == "LONG" else (entry_ref - current_price)
 
     payload = {
         "symbol": pos.symbol,
         "bias": pos.bias,
+        "state": pos.state,
         "setup_type": pos.setup_type,
         "entry_fill": pos.entry_fill,
+        "entry_limit": pos.entry_limit,
+        "entry_zone": f"{pos.entry_min:.2f}–{pos.entry_max:.2f}",
         "current_price": current_price,
         "unrealized_pnl_points": round(pnl_pts, 2) if pnl_pts else None,
         "stop_loss": pos.stop_loss,
@@ -76,23 +119,40 @@ def assess_position(config: Any, pos: Any) -> str:
         "thesis": pos.thesis,
     }
 
+    system_prompt = _load_system_prompt(config)
+
     client = anthropic.Anthropic(api_key=api_key)
     try:
         response = client.messages.create(
             model=config.llm.model,
-            max_tokens=256,
+            max_tokens=512,
             temperature=0.3,
-            system=_ASSESS_SYSTEM_PROMPT,
+            system=system_prompt,
             messages=[{
                 "role": "user",
                 "content": (
-                    "Assess this active position and advise:\n\n"
+                    "Assess this position and return your recommendation as JSON:\n\n"
                     + json.dumps(payload, indent=2)
                 ),
             }],
             timeout=15,
         )
-        return response.content[0].text
+        raw_text = response.content[0].text
+        raw_dict = _extract_json(raw_text)
+
+        # Clamp confidence
+        if raw_dict.get("confidence", 0) < 0:
+            raw_dict["confidence"] = 0
+
+        rec = AssessmentRecommendation.model_validate(raw_dict)
+        log.info(
+            "Assessment for trade %d: action=%s confidence=%d",
+            pos.id, rec.action, rec.confidence,
+        )
+        return rec
+
     except Exception as exc:  # noqa: BLE001
-        log.warning("Quick-assess LLM call failed: %s", exc)
-        return f"Assessment unavailable: {exc}"
+        log.warning("Assess LLM call failed: %s", exc)
+        return _HOLD_FALLBACK.model_copy(
+            update={"rationale": f"Assessment failed: {exc}"},
+        )
