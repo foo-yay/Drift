@@ -216,6 +216,16 @@ class PositionManager:
         if not pos or pos.state not in ("WORKING", "FILLED"):
             return {"status": "error", "message": "Position not found or already closed."}
 
+        # Dev/sandbox trades have no real IB orders — just update the DB
+        if pos.source in ("dev", "sandbox"):
+            close_state = "CLOSED_CANCEL" if pos.state == "WORKING" else "CLOSED_MANUAL"
+            self._trades.close_trade(
+                position_id, close_state,
+                exit_reason=f"Operator closed ({pos.source} trade — no IB orders)",
+            )
+            log.info("Trade %d (%s) closed locally — no IB interaction", position_id, pos.source)
+            return {"status": "ok"}
+
         client = IBClient(self._cfg.broker)
 
         if pos.state == "WORKING":
