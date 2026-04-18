@@ -358,6 +358,19 @@ class IBClient:
 
         try:
             exit_action = "SELL" if bias.upper() == "LONG" else "BUY"
+
+            # Cancel any working orders on the exit side first to avoid
+            # hitting IB's 15-order-per-side limit.
+            open_orders = ib.openOrders()
+            for o in open_orders:
+                if getattr(o, "action", None) == exit_action:
+                    try:
+                        ib.cancelOrder(o)
+                    except Exception:  # noqa: BLE001
+                        pass
+            if open_orders:
+                ib.sleep(1)
+
             close_order = MarketOrder(
                 action=exit_action,
                 totalQuantity=quantity,
@@ -382,6 +395,37 @@ class IBClient:
             }
         except Exception as exc:  # noqa: BLE001
             log.exception("Close position failed: %s", exc)
+            return {"status": "error", "message": str(exc)}
+        finally:
+            try:
+                ib.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+
+    # ------------------------------------------------------------------
+    # Cancel all orders (cleanup)
+    # ------------------------------------------------------------------
+
+    def cancel_all_orders(self) -> dict[str, Any]:
+        """Cancel ALL open orders for MNQ.  Use to clean up orphaned orders."""
+        try:
+            ib, _ = self._connect()
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "error", "message": f"Connection failed: {exc}"}
+
+        try:
+            open_orders = ib.openOrders()
+            cancelled = 0
+            for o in open_orders:
+                try:
+                    ib.cancelOrder(o)
+                    cancelled += 1
+                except Exception:  # noqa: BLE001
+                    pass
+            ib.sleep(1)
+            log.info("Cancelled %d open orders", cancelled)
+            return {"status": "ok", "cancelled": cancelled}
+        except Exception as exc:  # noqa: BLE001
             return {"status": "error", "message": str(exc)}
         finally:
             try:

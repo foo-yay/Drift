@@ -226,7 +226,16 @@ class PositionManager:
             self._trades.close_trade(position_id, "CLOSED_CANCEL", exit_reason="Operator cancelled before fill")
             return result
 
-        # FILLED — close with market order
+        # FILLED — cancel SL/TP first, then close with market order
+        if pos.parent_order_id:
+            client.cancel_bracket(pos.parent_order_id)
+        else:
+            # No parent ID — cancel individually
+            if pos.tp_order_id:
+                client.cancel_tp(pos.tp_order_id)
+            if pos.sl_order_id:
+                client.cancel_tp(pos.sl_order_id)  # cancel_tp works for any order
+
         result = client.close_position(pos.bias, pos.quantity)
         if result["status"] == "ok":
             self._trades.close_trade(
