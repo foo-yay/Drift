@@ -162,3 +162,97 @@ def test_get_all(store):
     store.create(**{**_BASE, "signal_key": "MNQ:LONG:x:12"},
                   state="FILLED", entry_limit=19_005.0)
     assert len(store.get_all()) == 2
+
+
+# ------------------------------------------------------------------
+# Trade parameter updates
+# ------------------------------------------------------------------
+
+def test_update_stop_loss(store):
+    tid = store.create(**{**_BASE, "signal_key": "MNQ:LONG:x:20"},
+                        state="FILLED", entry_limit=19_005.0)
+    store.update_stop_loss(tid, 18_990.0, sl_order_id=999)
+    row = store.get_by_id(tid)
+    assert row.stop_loss == 18_990.0
+    assert row.sl_order_id == 999
+
+
+def test_update_take_profits(store):
+    tid = store.create(**{**_BASE, "signal_key": "MNQ:LONG:x:21"},
+                        state="FILLED", entry_limit=19_005.0)
+    store.update_take_profits(tid, tp1=19_060.0, tp2=19_090.0)
+    row = store.get_by_id(tid)
+    assert row.take_profit_1 == 19_060.0
+    assert row.take_profit_2 == 19_090.0
+
+
+def test_update_take_profits_partial(store):
+    tid = store.create(**{**_BASE, "signal_key": "MNQ:LONG:x:22"},
+                        state="FILLED", entry_limit=19_005.0)
+    store.update_take_profits(tid, tp1=19_050.0)
+    row = store.get_by_id(tid)
+    assert row.take_profit_1 == 19_050.0
+    assert row.take_profit_2 == 19_070.0  # original
+
+
+def test_update_entry_limit(store):
+    tid = store.create(**{**_BASE, "signal_key": "MNQ:LONG:x:23"},
+                        state="WORKING", entry_limit=19_005.0)
+    store.update_entry_limit(tid, 19_000.0, parent_order_id=100,
+                             tp_order_id=101, sl_order_id=102)
+    row = store.get_by_id(tid)
+    assert row.entry_limit == 19_000.0
+    assert row.parent_order_id == 100
+
+
+def test_update_entry_limit_only_working(store):
+    """update_entry_limit should not change a FILLED trade."""
+    tid = store.create(**{**_BASE, "signal_key": "MNQ:LONG:x:24"},
+                        state="FILLED", entry_limit=19_005.0)
+    store.update_entry_limit(tid, 19_000.0)
+    row = store.get_by_id(tid)
+    assert row.entry_limit == 19_005.0  # unchanged
+
+
+def test_update_hold_window(store):
+    tid = store.create(**{**_BASE, "signal_key": "MNQ:LONG:x:25"},
+                        state="FILLED", entry_limit=19_005.0)
+    store.update_hold_window(tid, 90)
+    row = store.get_by_id(tid)
+    assert row.max_hold_minutes == 90
+
+
+# ------------------------------------------------------------------
+# Assessment log
+# ------------------------------------------------------------------
+
+def test_log_assessment(store):
+    tid = store.create(**{**_BASE, "signal_key": "MNQ:LONG:x:30"},
+                        state="FILLED", entry_limit=19_005.0)
+    aid = store.log_assessment(tid, "HOLD", 80, "Looks good", '{"action": "HOLD"}')
+    assert aid >= 1
+
+    assessments = store.get_assessments(tid)
+    assert len(assessments) == 1
+    assert assessments[0]["action"] == "HOLD"
+    assert assessments[0]["applied"] == 0
+
+
+def test_mark_assessment_applied(store):
+    tid = store.create(**{**_BASE, "signal_key": "MNQ:LONG:x:31"},
+                        state="FILLED", entry_limit=19_005.0)
+    aid = store.log_assessment(tid, "ADJUST", 70, "Tighten", '{}')
+    store.mark_assessment_applied(aid, applied=1)
+
+    assessments = store.get_assessments(tid)
+    assert assessments[0]["applied"] == 1
+
+
+def test_mark_assessment_dismissed(store):
+    tid = store.create(**{**_BASE, "signal_key": "MNQ:LONG:x:32"},
+                        state="FILLED", entry_limit=19_005.0)
+    aid = store.log_assessment(tid, "CLOSE", 90, "Dead", '{}')
+    store.mark_assessment_applied(aid, applied=-1)
+
+    assessments = store.get_assessments(tid)
+    assert assessments[0]["applied"] == -1

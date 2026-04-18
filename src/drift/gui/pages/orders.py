@@ -187,19 +187,108 @@ def _manual_close(config, position_id: int) -> None:
 
 
 # ------------------------------------------------------------------
-# Quick-Assess LLM
+# Structured Assess
 # ------------------------------------------------------------------
 
 def _quick_assess(config, pos) -> None:
-    """Fire a quick LLM advisory query for the given position."""
+    """Run a structured LLM assessment and show recommendations."""
     try:
         from drift.ai.position_advisor import assess_position
+        from drift.brokers.position_manager import PositionManager
+
+        db_path = str(_PROJECT_ROOT / config.storage.sqlite_path)
 
         with st.spinner("Getting LLM assessment…"):
-            advice = assess_position(config, pos)
-        st.info(advice, icon="🧠")
+            rec = assess_position(config, pos)
+
+        mgr = PositionManager(config, db_path)
+        assess_id = mgr.log_assessment(pos.id, rec)
+
+        _render_assessment(config, pos, rec, assess_id)
+
+        mgr.close()
     except Exception as exc:  # noqa: BLE001
-        st.error(f"Quick-Assess failed: {exc}")
+        st.error(f"Assessment failed: {exc}")
+
+
+def _render_assessment(config, pos, rec, assess_id: int) -> None:
+    """Display a structured assessment with Apply/Dismiss actions."""
+    action_colors = {"HOLD": "#52b788", "ADJUST": "#e8a838", "CLOSE": "#e05252"}
+    color = action_colors.get(rec.action, "#888")
+
+    changes: list[str] = []
+    if rec.new_stop_loss is not None:
+        changes.append(f"SL → {rec.new_stop_loss:.2f}")
+    if rec.new_take_profit_1 is not None:
+        changes.append(f"TP1 → {rec.new_take_profit_1:.2f}")
+    if rec.new_take_profit_2 is not None:
+        changes.append(f"TP2 → {rec.new_take_profit_2:.2f}")
+    if rec.new_entry_limit is not None:
+        changes.append(f"Entry → {rec.new_entry_limit:.2f}")
+    if rec.new_max_hold_minutes is not None:
+        changes.append(f"Hold → {rec.new_max_hold_minutes}m")
+    if rec.recommended_exit_mode:
+        changes.append(f"Mode → {rec.recommended_exit_mode}")
+    changes_html = " · ".join(changes) if changes else "No parameter changes"
+
+    flags_html = ""
+    if rec.risk_flags:
+        flags_html = (
+            f"<div style='color:#e8a838;font-size:0.82rem;margin-top:4px'>"
+            f"⚠️ {' · '.join(rec.risk_flags)}</div>"
+        )
+
+    st.markdown(
+        f"<div style='border-left:3px solid {color};padding-left:8px;margin:6px 0'>"
+        f"<div style='font-size:0.9rem'>"
+        f"<strong style='color:{color}'>{rec.action}</strong>"
+        f" · {rec.confidence}% confidence</div>"
+        f"<div style='font-size:0.85rem;color:#ccc;margin-top:2px'>{rec.rationale}</div>"
+        f"<div style='font-size:0.82rem;margin-top:4px'>{changes_html}</div>"
+        f"{flags_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+    if rec.action in ("ADJUST", "CLOSE"):
+        with st.container(horizontal=True, horizontal_alignment="left", gap="small"):
+            if st.button(
+                "✅ Apply", key=f"ord_apply_assess_{pos.id}_{assess_id}",
+                type="primary", width="content",
+            ):
+                _apply_assessment(config, pos.id, rec, assess_id)
+            if st.button(
+                "✕ Dismiss", key=f"ord_dismiss_assess_{pos.id}_{assess_id}",
+                width="content",
+            ):
+                _dismiss_assessment(config, assess_id)
+
+
+def _apply_assessment(config, position_id: int, rec, assess_id: int) -> None:
+    from drift.brokers.position_manager import PositionManager
+
+    db_path = str(_PROJECT_ROOT / config.storage.sqlite_path)
+    mgr = PositionManager(config, db_path)
+    with st.spinner("Applying assessment changes…"):
+        result = mgr.apply_assessment(position_id, rec)
+    if result["status"] == "ok":
+        mgr.mark_assessment_applied(assess_id)
+        applied_changes = result.get("changes", [])
+        st.toast(f"Applied: {', '.join(applied_changes)}")
+    else:
+        st.error(f"Failed: {result.get('message', 'unknown error')}")
+    mgr.close()
+    st.rerun()
+
+
+def _dismiss_assessment(config, assess_id: int) -> None:
+    from drift.brokers.position_manager import PositionManager
+
+    db_path = str(_PROJECT_ROOT / config.storage.sqlite_path)
+    mgr = PositionManager(config, db_path)
+    mgr.dismiss_assessment(assess_id)
+    mgr.close()
+    st.toast("Assessment dismissed")
+    st.rerun()
 
 
 # ------------------------------------------------------------------
@@ -310,7 +399,7 @@ def _render_pending_card(config, order) -> None:
             if st.button("✅ Approve", key=f"approve_{order.id}", type="primary", width="content"):
                 _submit_order(config, order)
             if st.button("🧠 Assess", key=f"assess_pend_{order.id}", width="content"):
-                st.info("LLM assessment for pending orders is not yet implemented.", icon="🧠")
+                _quick_assess(config, order)
             if st.button("❌ Reject", key=f"reject_{order.id}", width="content"):
                 from drift.storage.trade_store import TradeStore
                 s = TradeStore(str(_PROJECT_ROOT / config.storage.sqlite_path))
