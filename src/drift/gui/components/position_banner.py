@@ -128,6 +128,9 @@ def _render_pending_banner_card(config, order) -> None:
             if st.button("❌ Reject", key=f"bn_reject_{order.id}", width="content"):
                 _reject_order(config, order)
 
+        # Show persisted assessment if one exists
+        _show_stored_assessment(config, order)
+
 
 def _render_position_card(config, pos) -> None:
     """Compact position card: info block + full-width button row."""
@@ -226,6 +229,9 @@ def _render_position_card(config, pos) -> None:
                              help="Quick AI assessment", width="content"):
                     _assess_position(config, pos)
 
+        # Show persisted assessment if one exists
+        _show_stored_assessment(config, pos)
+
 
 # ---------------------------------------------------------------------------
 # Action helpers
@@ -303,13 +309,25 @@ def _assess_position(config, pos) -> None:
         # Log the assessment
         mgr = PositionManager(config, db_path)
         assess_id = mgr.log_assessment(pos.id, rec)
-
-        # Display structured recommendation
-        _render_assessment(config, pos, rec, assess_id)
-
         mgr.close()
+
+        # Store in session state so it survives fragment reruns
+        st.session_state[f"bn_assess_result_{pos.id}"] = {
+            "rec": rec,
+            "assess_id": assess_id,
+        }
+
     except Exception as exc:  # noqa: BLE001
         st.error(f"Assessment failed: {exc}")
+
+
+def _show_stored_assessment(config, pos) -> None:
+    """Render a persisted assessment from session state if one exists."""
+    key = f"bn_assess_result_{pos.id}"
+    data = st.session_state.get(key)
+    if not data:
+        return
+    _render_assessment(config, pos, data["rec"], data["assess_id"])
 
 
 def _render_assessment(config, pos, rec, assess_id: int) -> None:
@@ -362,7 +380,11 @@ def _render_assessment(config, pos, rec, assess_id: int) -> None:
                 "✕ Dismiss", key=f"bn_dismiss_assess_{pos.id}_{assess_id}",
                 width="content",
             ):
-                _dismiss_assessment(config, assess_id)
+                _dismiss_assessment(config, assess_id, position_id=pos.id)
+    else:
+        # HOLD — show a dismiss button to clear the assessment
+        if st.button("✕ Clear", key=f"bn_clear_assess_{pos.id}_{assess_id}", width="content"):
+            _dismiss_assessment(config, assess_id, position_id=pos.id)
 
 
 def _apply_assessment(config, position_id: int, rec, assess_id: int) -> None:
@@ -379,15 +401,17 @@ def _apply_assessment(config, position_id: int, rec, assess_id: int) -> None:
     else:
         st.error(f"Failed: {result.get('message', 'unknown error')}")
     mgr.close()
+    st.session_state.pop(f"bn_assess_result_{position_id}", None)
     st.rerun()
 
 
-def _dismiss_assessment(config, assess_id: int) -> None:
+def _dismiss_assessment(config, assess_id: int, position_id: int = 0) -> None:
     from drift.brokers.position_manager import PositionManager
 
     db_path = str(_PROJECT_ROOT / config.storage.sqlite_path)
     mgr = PositionManager(config, db_path)
     mgr.dismiss_assessment(assess_id)
     mgr.close()
+    st.session_state.pop(f"bn_assess_result_{position_id}", None)
     st.toast("Assessment dismissed")
     st.rerun()
