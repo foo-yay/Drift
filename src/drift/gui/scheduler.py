@@ -119,6 +119,11 @@ class BackgroundScheduler:
         # enforce an appropriate minimum grace period before the next fires.
         self._last_watch_cycle_utc: datetime | None = None
         self._last_watch_was_trade_plan: bool = False
+        # Post-close cycle deferral: if a cycle is running when a position
+        # closes, the close events are queued here and drained the moment the
+        # running cycle finishes rather than being silently dropped.
+        self._pending_post_close_events: list[dict] = []
+        self._pending_post_close_lock = threading.Lock()
         self._thread = threading.Thread(
             target=self._loop,
             name="drift-scheduler",
@@ -197,10 +202,12 @@ class BackgroundScheduler:
             app = DriftApplication(abs_config, config_path=self._config_path, watch_trigger=watch_trigger, trigger=trigger)
             outcome = app.run_once() or "unknown"
             self.state.record_run(outcome)
+            self._drain_pending_post_close()
             return outcome
         except Exception as exc:  # noqa: BLE001
             log.exception("Scheduler cycle error: %s", exc)
             self.state.record_run("error", str(exc))
+            self._drain_pending_post_close()
             return "error"
         finally:
             console_mod.console = orig
@@ -451,10 +458,42 @@ class BackgroundScheduler:
             _CLOSE_TYPES = {"SL_HIT", "TP1_HIT", "TP2_HIT", "MANUAL_HIT"}
             closed = [c for c in changes if c.get("type") in _CLOSE_TYPES
                       or c.get("type", "").endswith("_HIT")]
-            if closed and not self.state.running:
-                self._fire_post_close_cycle(closed)
+            if closed:
+                self._queue_post_close_cycle(closed)
         except Exception as exc:  # noqa: BLE001
             log.warning("Position polling error: %s", exc)
+
+    def _queue_post_close_cycle(self, close_events: list[dict]) -> None:
+        """Schedule a post-close LLM cycle.
+
+        If a cycle is currently running the events are queued and will be
+        drained (and fired) the moment that cycle completes via
+        ``_drain_pending_post_close``.  If nothing is running, fires
+        immediately.
+        """
+        with self._pending_post_close_lock:
+            if self.state.running:
+                self._pending_post_close_events.extend(close_events)
+                log.info(
+                    "Cycle in progress — deferring post-close cycle (%d event(s))",
+                    len(close_events),
+                )
+                return
+        # Not running — fire immediately.
+        self._fire_post_close_cycle(close_events)
+
+    def _drain_pending_post_close(self) -> None:
+        """Fire any post-close cycles that were deferred while a cycle was running.
+
+        Called by ``_run_cycle`` immediately after ``record_run`` so the
+        deferred cycle runs as soon as the blocking cycle finishes.
+        """
+        with self._pending_post_close_lock:
+            events = self._pending_post_close_events[:]
+            self._pending_post_close_events.clear()
+        if events:
+            log.info("Draining %d deferred post-close event(s)", len(events))
+            self._fire_post_close_cycle(events)
 
     def _fire_post_close_cycle(self, close_events: list[dict]) -> None:
         """Fire an immediate LLM cycle after a position closes.
@@ -571,8 +610,8 @@ class BackgroundScheduler:
                     self._fill_timeout_assessed.add(assess_key)
                     self._auto_assess_position(config, pos)
 
-        if cancelled_any and not self.state.running:
-            self._fire_post_close_cycle([{"type": "THESIS_WINDOW_CANCEL", "position_id": 0}])
+        if cancelled_any:
+            self._queue_post_close_cycle([{"type": "THESIS_WINDOW_CANCEL", "position_id": 0}])
 
     def _auto_assess_position(self, config, pos) -> None:
         """Run an automatic LLM assessment for a position and store the result."""
@@ -662,8 +701,8 @@ class BackgroundScheduler:
                     pos.id, result.get("message"),
                 )
 
-        if closed_any and not self.state.running:
-            self._fire_post_close_cycle([{"type": "HOLD_EXPIRY", "position_id": 0}])
+        if closed_any:
+            self._queue_post_close_cycle([{"type": "HOLD_EXPIRY", "position_id": 0}])
 
 
 # ---------------------------------------------------------------------------
