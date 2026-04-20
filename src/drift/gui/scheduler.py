@@ -439,7 +439,7 @@ class BackgroundScheduler:
                 log.info("Position update: %s", ch)
             mgr.close()
         except Exception as exc:  # noqa: BLE001
-            log.debug("Position polling error: %s", exc)
+            log.warning("Position polling error: %s", exc)
 
     # ------------------------------------------------------------------
     # Position expiry daemon (HOLD_EXPIRY auto-close)

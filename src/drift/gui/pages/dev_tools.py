@@ -192,7 +192,7 @@ def _fire_real_bracket(config, bias: str) -> dict:
         take_profit_1=tp1,
         take_profit_2=tp2,
         thesis="Dev Tools live IB bracket test — placed via Dev Tools page.",
-        source="dev",
+        source="ib_test",
         state="WORKING",
         entry_limit=entry,
         max_hold_minutes=30,
