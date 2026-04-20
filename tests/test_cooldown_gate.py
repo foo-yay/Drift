@@ -25,12 +25,13 @@ def _make_gates_config(cooldown_enabled: bool = True) -> GatesSection:
     )
 
 
-def _make_risk_config(cooldown_minutes: int = 15) -> RiskSection:
+def _make_risk_config(cooldown_minutes: int = 15, no_trade_cooldown_minutes: int = 15) -> RiskSection:
     return RiskSection(
         min_confidence=65,
         min_reward_risk=1.8,
         max_signals_per_day=3,
         cooldown_minutes=cooldown_minutes,
+        no_trade_cooldown_minutes=no_trade_cooldown_minutes,
         max_stop_points=30.0,
         min_stop_points=6.0,
         atr_stop_floor_mult=0.8,
@@ -100,7 +101,7 @@ class TestCooldownGateZeroCooldown:
     def test_zero_cooldown_always_passes(self, tmp_path):
         log = tmp_path / "events.jsonl"
         _write_log(log, [_event("TRADE_PLAN_ISSUED", minutes_ago=0.1)])
-        gate = CooldownGate(_make_gates_config(), _make_risk_config(cooldown_minutes=0), log)
+        gate = CooldownGate(_make_gates_config(), _make_risk_config(cooldown_minutes=0, no_trade_cooldown_minutes=0), log)
         result = gate.evaluate(_make_snapshot())
         assert result.passed
 
@@ -256,3 +257,89 @@ class TestCooldownGateSecondsRemaining:
         assert remaining is not None
         # 30 min hold − 5 min elapsed = ~25 min = ~1500 s
         assert 1450 < remaining < 1560
+
+
+class TestNoTradeCooldown:
+    """After LLM_NO_TRADE the gate should block for no_trade_cooldown_minutes."""
+
+    def test_blocks_after_recent_no_trade(self, tmp_path):
+        """LLM_NO_TRADE 5 min ago, no_trade_cooldown 15 min → blocked."""
+        log = tmp_path / "events.jsonl"
+        _write_log(log, [_event("LLM_NO_TRADE", minutes_ago=5)])
+        gate = CooldownGate(
+            _make_gates_config(),
+            _make_risk_config(cooldown_minutes=15, no_trade_cooldown_minutes=15),
+            log,
+        )
+        result = gate.evaluate(_make_snapshot())
+        assert not result.passed
+        assert "cooldown" in result.reason.lower()
+
+    def test_passes_after_no_trade_window_expires(self, tmp_path):
+        """LLM_NO_TRADE 20 min ago, no_trade_cooldown 15 min → passes."""
+        log = tmp_path / "events.jsonl"
+        _write_log(log, [_event("LLM_NO_TRADE", minutes_ago=20)])
+        gate = CooldownGate(
+            _make_gates_config(),
+            _make_risk_config(cooldown_minutes=15, no_trade_cooldown_minutes=15),
+            log,
+        )
+        result = gate.evaluate(_make_snapshot())
+        assert result.passed
+
+    def test_no_trade_cooldown_shorter_than_trade_cooldown(self, tmp_path):
+        """no_trade_cooldown=5, LLM_NO_TRADE 7 min ago → passes."""
+        log = tmp_path / "events.jsonl"
+        _write_log(log, [_event("LLM_NO_TRADE", minutes_ago=7)])
+        gate = CooldownGate(
+            _make_gates_config(),
+            _make_risk_config(cooldown_minutes=30, no_trade_cooldown_minutes=5),
+            log,
+        )
+        result = gate.evaluate(_make_snapshot())
+        assert result.passed
+
+    def test_most_recent_outcome_wins(self, tmp_path):
+        """TRADE_PLAN 30 min ago (clear), LLM_NO_TRADE 3 min ago → blocked by NO_TRADE cooldown."""
+        log = tmp_path / "events.jsonl"
+        _write_log(log, [
+            _event("TRADE_PLAN_ISSUED", minutes_ago=30),
+            _event("LLM_NO_TRADE", minutes_ago=3),
+        ])
+        gate = CooldownGate(
+            _make_gates_config(),
+            _make_risk_config(cooldown_minutes=15, no_trade_cooldown_minutes=15),
+            log,
+        )
+        result = gate.evaluate(_make_snapshot())
+        assert not result.passed
+
+    def test_trade_plan_after_no_trade_uses_trade_cooldown(self, tmp_path):
+        """LLM_NO_TRADE 30 min ago, TRADE_PLAN 5 min ago → uses trade cooldown."""
+        log = tmp_path / "events.jsonl"
+        _write_log(log, [
+            _event("LLM_NO_TRADE", minutes_ago=30),
+            _event_with_plan(minutes_ago=5, max_hold_minutes=25),
+        ])
+        gate = CooldownGate(
+            _make_gates_config(),
+            _make_risk_config(cooldown_minutes=15, no_trade_cooldown_minutes=15),
+            log,
+        )
+        result = gate.evaluate(_make_snapshot())
+        assert not result.passed
+        assert "25" in result.reason  # 25-min trade plan cooldown
+
+    def test_seconds_remaining_for_no_trade(self, tmp_path):
+        """seconds_remaining() works with LLM_NO_TRADE events."""
+        log = tmp_path / "events.jsonl"
+        _write_log(log, [_event("LLM_NO_TRADE", minutes_ago=5)])
+        gate = CooldownGate(
+            _make_gates_config(),
+            _make_risk_config(cooldown_minutes=30, no_trade_cooldown_minutes=15),
+            log,
+        )
+        remaining = gate.seconds_remaining()
+        assert remaining is not None
+        # 15 min no_trade_cooldown − 5 min elapsed = ~10 min = ~600 s
+        assert 550 < remaining < 650
