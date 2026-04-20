@@ -133,7 +133,7 @@ class BackgroundScheduler:
         self._watch_thread.start()
         self._expiry_thread = threading.Thread(
             target=self._position_expiry_loop,
-            name="drift-position-expiry",
+            name="drift-position-monitor",
             daemon=True,
         )
         self._expiry_thread.start()
@@ -421,10 +421,17 @@ class BackgroundScheduler:
             self._last_watch_was_trade_plan = (outcome == "TRADE_PLAN_ISSUED")
 
         # Poll active IB positions for fill/exit detection
+        # (also runs in the position-monitor thread; having it here too
+        #  keeps latency low when the watch loop fires frequently)
         self._poll_positions(config)
 
     def _poll_positions(self, config) -> None:
-        """Poll IB for position state changes (fills, exits)."""
+        """Poll IB for position state changes (fills, exits).
+
+        When a position *closes* (SL hit, TP hit, etc.) an immediate LLM cycle
+        is fired so the system can evaluate whether a new opportunity exists at
+        the current price without waiting for the next scheduled interval.
+        """
         if not config.broker.enabled:
             return
         try:
@@ -438,23 +445,59 @@ class BackgroundScheduler:
             for ch in changes:
                 log.info("Position update: %s", ch)
             mgr.close()
+
+            # If any change is a *close* (not an entry fill), fire an
+            # immediate post-close cycle so the LLM can evaluate new setups.
+            _CLOSE_TYPES = {"SL_HIT", "TP1_HIT", "TP2_HIT", "MANUAL_HIT"}
+            closed = [c for c in changes if c.get("type") in _CLOSE_TYPES
+                      or c.get("type", "").endswith("_HIT")]
+            if closed and not self.state.running:
+                self._fire_post_close_cycle(closed)
         except Exception as exc:  # noqa: BLE001
             log.warning("Position polling error: %s", exc)
 
+    def _fire_post_close_cycle(self, close_events: list[dict]) -> None:
+        """Fire an immediate LLM cycle after a position closes.
+
+        The trade is already closed in the DB, so the cooldown gate's
+        ``_check_active_trade()`` will pass through — no special bypass needed.
+        Any watch/cooldown timers are cancelled since the market context has
+        changed.
+        """
+        labels = ", ".join(
+            f"#{c.get('position_id')} {c.get('type')}" for c in close_events
+        )
+        log.info("Position closed (%s) — firing immediate post-close LLM cycle", labels)
+        self._cancel_cooldown_timer()
+        self._last_watch_cycle_utc = None  # clear watch grace so cycle runs immediately
+        self._run_cycle(trigger="post_close")
+
     # ------------------------------------------------------------------
-    # Position expiry daemon (HOLD_EXPIRY auto-close)
+    # Position monitor daemon (IB poll + fill timeouts + hold expiry)
     # ------------------------------------------------------------------
 
+    _POSITION_POLL_INTERVAL = 15  # seconds between IB position checks
+
     def _position_expiry_loop(self) -> None:
-        """Poll every 60 s; handle fill timeouts and thesis window expiry."""
-        time.sleep(30)  # startup delay — let the process settle
+        """Poll every 15 s; detect fills/exits, handle fill timeouts, hold expiry.
+
+        This is the single thread responsible for all IB position lifecycle
+        transitions.  It runs at the same cadence as the UI position banner
+        (15 s) so state changes appear promptly in the GUI.
+        """
+        time.sleep(15)  # startup delay — let the process settle
         while True:
             try:
+                from drift.utils.config import load_app_config
+                config = load_app_config(self._config_path)
+                # 1. Poll IB for fills and exits (SL/TP hits)
+                self._poll_positions(config)
+                # 2. Check fill timeouts and thesis window expiry
                 self._handle_fill_timeouts()
                 self._close_expired_positions()
             except Exception as exc:  # noqa: BLE001
-                log.warning("Position expiry check error: %s", exc)
-            time.sleep(60)
+                log.warning("Position monitor error: %s", exc)
+            time.sleep(self._POSITION_POLL_INTERVAL)
 
     def _handle_fill_timeouts(self) -> None:
         """Auto-trigger Assess for WORKING orders that exceed fill_timeout_minutes.
@@ -464,7 +507,8 @@ class BackgroundScheduler:
         is stored in session state so the position banner shows it to the operator.
 
         Also enforces the thesis-window hard stop: if signal_time + max_hold_minutes
-        has elapsed and the order is still WORKING, auto-cancel unconditionally.
+        has elapsed and the order is still WORKING, auto-cancel unconditionally
+        and fire an immediate post-close LLM cycle.
         """
         from drift.brokers.position_manager import PositionManager
         from drift.gui.state import _PROJECT_ROOT
@@ -484,6 +528,7 @@ class BackgroundScheduler:
 
         now = datetime.now(tz=timezone.utc)
         fill_timeout = config.risk.fill_timeout_minutes
+        cancelled_any = False
 
         for pos in working_trades:
             # Use thesis_anchor (= generated_at initially, reset on assess)
@@ -510,6 +555,7 @@ class BackgroundScheduler:
                 mgr.close()
                 if result["status"] == "ok":
                     log.info("Trade %d auto-cancelled at thesis window expiry", pos.id)
+                    cancelled_any = True
                 else:
                     log.error("Failed to auto-cancel trade %d: %s", pos.id, result.get("message"))
                 continue
@@ -524,6 +570,9 @@ class BackgroundScheduler:
                     )
                     self._fill_timeout_assessed.add(assess_key)
                     self._auto_assess_position(config, pos)
+
+        if cancelled_any and not self.state.running:
+            self._fire_post_close_cycle([{"type": "THESIS_WINDOW_CANCEL", "position_id": 0}])
 
     def _auto_assess_position(self, config, pos) -> None:
         """Run an automatic LLM assessment for a position and store the result."""
@@ -561,6 +610,8 @@ class BackgroundScheduler:
 
         MANUAL exit mode is exempt — the operator explicitly chose to hold
         indefinitely, so the thesis window is informational only.
+
+        After a successful auto-close, fires an immediate post-close LLM cycle.
         """
         from drift.brokers.position_manager import PositionManager
         from drift.gui.state import _PROJECT_ROOT
@@ -575,6 +626,7 @@ class BackgroundScheduler:
         filled_trades = store.get_filled()
         store.close()
 
+        closed_any = False
         now = datetime.now(tz=timezone.utc)
         for pos in filled_trades:
             # MANUAL = hold indefinitely; skip it
@@ -603,11 +655,15 @@ class BackgroundScheduler:
             mgr.close()
             if result["status"] == "ok":
                 log.info("Trade %d auto-closed at hold window expiry", pos.id)
+                closed_any = True
             else:
                 log.error(
                     "Failed to auto-close trade %d: %s",
                     pos.id, result.get("message"),
                 )
+
+        if closed_any and not self.state.running:
+            self._fire_post_close_cycle([{"type": "HOLD_EXPIRY", "position_id": 0}])
 
 
 # ---------------------------------------------------------------------------
