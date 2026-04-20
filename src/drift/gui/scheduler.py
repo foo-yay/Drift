@@ -112,6 +112,8 @@ class BackgroundScheduler:
         # Track whether price has ever touched the entry zone for each plan (by DB id).
         # Populated continuously by the watch loop using 1m bar OHLC overlap.
         self._entry_zone_touched: dict[int, bool] = {}
+        # Track WORKING orders that have already been auto-assessed after fill timeout.
+        self._fill_timeout_assessed: set[str] = set()
         # Prevent watch-triggered cycles from cascading: track when the last
         # watch-triggered cycle fired, whether it produced a trade plan, and
         # enforce an appropriate minimum grace period before the next fires.
@@ -286,7 +288,8 @@ class BackgroundScheduler:
             config = load_app_config(self._config_path)
             root = _PROJECT_ROOT
             log_path = str(root / config.storage.jsonl_event_log)
-            gate = CooldownGate(config.gates, config.risk, log_path)
+            db_path = str(root / config.storage.sqlite_path) if config.storage.use_sqlite else None
+            gate = CooldownGate(config.gates, config.risk, log_path, db_path=db_path)
             return gate.seconds_remaining()
         except Exception as exc:  # noqa: BLE001
             log.debug("Could not query cooldown remaining: %s", exc)
@@ -443,21 +446,121 @@ class BackgroundScheduler:
     # ------------------------------------------------------------------
 
     def _position_expiry_loop(self) -> None:
-        """Poll every 60 s; close any non-MANUAL position that has exceeded max_hold_minutes."""
+        """Poll every 60 s; handle fill timeouts and thesis window expiry."""
         time.sleep(30)  # startup delay — let the process settle
         while True:
             try:
+                self._handle_fill_timeouts()
                 self._close_expired_positions()
             except Exception as exc:  # noqa: BLE001
                 log.warning("Position expiry check error: %s", exc)
             time.sleep(60)
 
-    def _close_expired_positions(self) -> None:
-        """Close any FILLED trade that has exceeded max_hold_minutes.
+    def _handle_fill_timeouts(self) -> None:
+        """Auto-trigger Assess for WORKING orders that exceed fill_timeout_minutes.
 
-        MANUAL mode is exempt — the operator explicitly chose to hold
-        indefinitely, so the hold window is informational only.
-        All other modes (TP1, TP2, HOLD_EXPIRY) are auto-closed.
+        When a WORKING order has been pending fill for longer than the configured
+        ``fill_timeout_minutes``, an automatic assessment is triggered.  The result
+        is stored in session state so the position banner shows it to the operator.
+
+        Also enforces the thesis-window hard stop: if signal_time + max_hold_minutes
+        has elapsed and the order is still WORKING, auto-cancel unconditionally.
+        """
+        from drift.brokers.position_manager import PositionManager
+        from drift.gui.state import _PROJECT_ROOT
+        from drift.storage.trade_store import TradeStore
+        from drift.utils.config import load_app_config
+
+        config = load_app_config(self._config_path)
+        root = _PROJECT_ROOT
+        db_path = str(root / config.storage.sqlite_path)
+
+        store = TradeStore(db_path)
+        working_trades = store.get_working()
+        store.close()
+
+        if not working_trades:
+            return
+
+        now = datetime.now(tz=timezone.utc)
+        fill_timeout = config.risk.fill_timeout_minutes
+
+        for pos in working_trades:
+            # Use thesis_anchor (= generated_at initially, reset on assess)
+            anchor_str = pos.thesis_anchor or pos.generated_at
+            if not anchor_str:
+                continue
+            try:
+                anchor_dt = datetime.fromisoformat(anchor_str)
+                if anchor_dt.tzinfo is None:
+                    anchor_dt = anchor_dt.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                continue
+
+            elapsed_min = (now - anchor_dt).total_seconds() / 60
+
+            # HARD STOP: thesis window expired → auto-cancel regardless
+            if elapsed_min >= pos.max_hold_minutes:
+                log.info(
+                    "Trade %d WORKING — thesis window expired (%.0f min >= %d min) — auto-cancelling",
+                    pos.id, elapsed_min, pos.max_hold_minutes,
+                )
+                mgr = PositionManager(config, db_path)
+                result = mgr.manual_close(pos.id)
+                mgr.close()
+                if result["status"] == "ok":
+                    log.info("Trade %d auto-cancelled at thesis window expiry", pos.id)
+                else:
+                    log.error("Failed to auto-cancel trade %d: %s", pos.id, result.get("message"))
+                continue
+
+            # FILL TIMEOUT: trigger auto-assess if not already pending
+            if elapsed_min >= fill_timeout:
+                assess_key = f"fill_timeout_assessed_{pos.id}"
+                if assess_key not in self._fill_timeout_assessed:
+                    log.info(
+                        "Trade %d WORKING — fill timeout (%.0f min >= %d min) — triggering auto-assess",
+                        pos.id, elapsed_min, fill_timeout,
+                    )
+                    self._fill_timeout_assessed.add(assess_key)
+                    self._auto_assess_position(config, pos)
+
+    def _auto_assess_position(self, config, pos) -> None:
+        """Run an automatic LLM assessment for a position and store the result."""
+        try:
+            from drift.ai.position_advisor import assess_position
+            from drift.brokers.position_manager import PositionManager
+            from drift.gui.state import _PROJECT_ROOT
+
+            db_path = str(_PROJECT_ROOT / config.storage.sqlite_path)
+            rec = assess_position(config, pos)
+
+            mgr = PositionManager(config, db_path)
+            assess_id = mgr.log_assessment(pos.id, rec)
+            mgr.close()
+
+            # Store in session state so the position banner picks it up
+            import streamlit as st
+            st.session_state[f"bn_assess_result_{pos.id}"] = {
+                "rec": rec,
+                "assess_id": assess_id,
+            }
+            log.info(
+                "Auto-assess trade %d: %s (%d%% confidence) — %s",
+                pos.id, rec.action, rec.confidence, rec.rationale[:80],
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Auto-assess failed for trade %d: %s", pos.id, exc)
+
+    def _close_expired_positions(self) -> None:
+        """Close any FILLED trade whose thesis window has expired.
+
+        The thesis window is measured from ``thesis_anchor`` (which defaults to
+        ``generated_at`` — the signal time — but resets when an Assess updates
+        ``max_hold_minutes``).
+
+        MANUAL exit mode is exempt — the operator explicitly chose to hold
+        indefinitely, so the thesis window is informational only.
         """
         from drift.brokers.position_manager import PositionManager
         from drift.gui.state import _PROJECT_ROOT
@@ -477,13 +580,15 @@ class BackgroundScheduler:
             # MANUAL = hold indefinitely; skip it
             if pos.exit_mode == "MANUAL":
                 continue
-            if not pos.fill_time or not pos.max_hold_minutes:
+            # Use thesis_anchor (= generated_at initially, reset on assess)
+            anchor_str = pos.thesis_anchor or pos.generated_at
+            if not anchor_str or not pos.max_hold_minutes:
                 continue
             try:
-                fill_dt = datetime.fromisoformat(pos.fill_time)
-                if fill_dt.tzinfo is None:
-                    fill_dt = fill_dt.replace(tzinfo=timezone.utc)
-                elapsed_min = (now - fill_dt).total_seconds() / 60
+                anchor_dt = datetime.fromisoformat(anchor_str)
+                if anchor_dt.tzinfo is None:
+                    anchor_dt = anchor_dt.replace(tzinfo=timezone.utc)
+                elapsed_min = (now - anchor_dt).total_seconds() / 60
                 if elapsed_min < pos.max_hold_minutes:
                     continue
             except (ValueError, TypeError):

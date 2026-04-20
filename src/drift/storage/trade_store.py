@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS trades (
     take_profit_2    REAL,
     max_hold_minutes INTEGER NOT NULL DEFAULT 60,
     generated_at     TEXT NOT NULL DEFAULT '',  -- trade plan creation time (ISO)
+    thesis_anchor    TEXT NOT NULL DEFAULT '',  -- datetime from which max_hold is measured (ISO)
 
     -- Lifecycle state
     state            TEXT NOT NULL DEFAULT 'PENDING',
@@ -115,6 +116,7 @@ class TradeRow:
     take_profit_2: float | None
     max_hold_minutes: int
     generated_at: str
+    thesis_anchor: str
     state: str
     reject_reason: str | None
     quantity: int
@@ -154,6 +156,22 @@ class TradeStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_DDL)
         self._conn.executescript(_ASSESSMENTS_DDL)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns that may be missing from older databases."""
+        cols = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(trades)").fetchall()
+        }
+        if "thesis_anchor" not in cols:
+            self._conn.execute(
+                "ALTER TABLE trades ADD COLUMN thesis_anchor TEXT NOT NULL DEFAULT ''"
+            )
+            # Backfill: set thesis_anchor = generated_at for existing rows
+            self._conn.execute(
+                "UPDATE trades SET thesis_anchor = generated_at WHERE thesis_anchor = ''"
+            )
 
     # ------------------------------------------------------------------
     # Create
@@ -198,16 +216,16 @@ class TradeStore:
             INSERT OR IGNORE INTO trades
                 (signal_key, symbol, bias, setup_type, confidence, source, thesis,
                  entry_min, entry_max, stop_loss, take_profit_1, take_profit_2,
-                 max_hold_minutes, generated_at,
+                 max_hold_minutes, generated_at, thesis_anchor,
                  state, quantity, entry_limit,
                  parent_order_id, tp_order_id, sl_order_id,
                  exit_mode, active_tp,
                  created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'TP1',?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'TP1',?,?,?)
             """,
             (signal_key, symbol, bias, setup_type, confidence, source, thesis,
              entry_min, entry_max, stop_loss, take_profit_1, take_profit_2,
-             max_hold_minutes, generated_at,
+             max_hold_minutes, generated_at, generated_at,
              state, quantity, entry_limit,
              parent_order_id, tp_order_id, sl_order_id,
              active_tp,
@@ -361,6 +379,13 @@ class TradeStore:
         ).fetchall()
         return [_row(r) for r in rows]
 
+    def get_working(self) -> list[TradeRow]:
+        """Return only WORKING trades."""
+        rows = self._conn.execute(
+            "SELECT * FROM trades WHERE state='WORKING' ORDER BY created_at ASC"
+        ).fetchall()
+        return [_row(r) for r in rows]
+
     def get_open(self) -> list[TradeRow]:
         """Return all non-terminal trades (PENDING through FILLED)."""
         rows = self._conn.execute(
@@ -461,8 +486,8 @@ class TradeStore:
     def update_hold_window(self, row_id: int, new_minutes: int) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
         self._conn.execute(
-            "UPDATE trades SET max_hold_minutes=?, updated_at=? WHERE id=?",
-            (new_minutes, now, row_id),
+            "UPDATE trades SET max_hold_minutes=?, thesis_anchor=?, updated_at=? WHERE id=?",
+            (new_minutes, now, now, row_id),
         )
 
     # ------------------------------------------------------------------
@@ -524,6 +549,7 @@ def _row(r: sqlite3.Row) -> TradeRow:
         take_profit_2=r["take_profit_2"],
         max_hold_minutes=r["max_hold_minutes"],
         generated_at=r["generated_at"],
+        thesis_anchor=r["thesis_anchor"],
         state=r["state"],
         reject_reason=r["reject_reason"],
         quantity=r["quantity"],

@@ -29,14 +29,20 @@ _MODE_BADGE = {
 
 
 def _time_display(pos) -> str:
-    """Return a time string for the hold window."""
-    if not (pos.fill_time and pos.max_hold_minutes):
+    """Return a time string for the thesis window.
+
+    Uses ``thesis_anchor`` (defaults to ``generated_at``, resets when an
+    assessment updates ``max_hold_minutes``) + ``max_hold_minutes`` as the
+    deadline.  Works for both WORKING and FILLED positions.
+    """
+    anchor_str = getattr(pos, "thesis_anchor", None) or pos.generated_at
+    if not (anchor_str and pos.max_hold_minutes):
         return ""
     try:
-        fill_dt = datetime.fromisoformat(pos.fill_time)
-        if fill_dt.tzinfo is None:
-            fill_dt = fill_dt.replace(tzinfo=timezone.utc)
-        elapsed_min = (datetime.now(tz=timezone.utc) - fill_dt).total_seconds() / 60
+        anchor_dt = datetime.fromisoformat(anchor_str)
+        if anchor_dt.tzinfo is None:
+            anchor_dt = anchor_dt.replace(tzinfo=timezone.utc)
+        elapsed_min = (datetime.now(tz=timezone.utc) - anchor_dt).total_seconds() / 60
         remaining = pos.max_hold_minutes - elapsed_min
         if remaining >= 0.5:
             return f"⏱ {remaining:.0f}m"

@@ -116,6 +116,8 @@ def assess_position(config: Any, pos: Any) -> AssessmentRecommendation:
         "exit_mode": pos.exit_mode,
         "max_hold_minutes": pos.max_hold_minutes,
         "fill_time": pos.fill_time,
+        "generated_at": pos.generated_at,
+        "thesis_anchor": getattr(pos, "thesis_anchor", None) or pos.generated_at,
         "thesis": pos.thesis,
     }
 

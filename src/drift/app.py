@@ -85,7 +85,7 @@ class DriftApplication:
             CalendarGate(config.calendar),
             NewsGate(config.gates),
             RegimeGate(config.gates),
-            CooldownGate(cooldown_cfg, config.risk, jsonl_path),
+            CooldownGate(cooldown_cfg, config.risk, jsonl_path, db_path=sqlite_path),
         ])
         self._llm_client = MockLLMClient() if sandbox else LLMClient(
             config.llm, log_path=jsonl_path
