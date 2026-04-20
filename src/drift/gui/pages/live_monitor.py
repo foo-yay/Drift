@@ -148,9 +148,9 @@ def _live_price_widget(symbol: str) -> None:
     """
     @st.fragment(run_every=5)
     def _inner() -> None:
-        from drift.data.providers.yfinance_provider import YFinanceProvider
-        try:
-            price = YFinanceProvider().get_latest_quote(symbol)
+        from drift.gui.state import get_live_price
+        price = get_live_price(symbol)
+        if price is not None:
             now_et = datetime.now(tz=_ET)
             st.markdown(
                 f"<div style='margin:0 0 4px 0; line-height:1.2'>"
@@ -161,8 +161,6 @@ def _live_price_widget(symbol: str) -> None:
                 f"</div>",
                 unsafe_allow_html=True,
             )
-        except Exception:  # noqa: BLE001
-            pass
 
     _inner()
 
@@ -219,15 +217,12 @@ def _chart_fragment(
         if show_emas or show_vwap or show_obs:
             overlay_data = _compute_overlay_data(bars, signals, show_emas, show_vwap, show_obs)
 
-        # Live price (fast_info — near-real-time) and active watch levels
+        # Live price (shared cache — near-real-time) and active watch levels
         # (SQLite read — instantaneous).  Both are cheap enough to fetch on
         # every chart render without any rate-limit concern.
         live_price: float | None = None
-        try:
-            from drift.data.providers.yfinance_provider import YFinanceProvider
-            live_price = YFinanceProvider().get_latest_quote(symbol)
-        except Exception:  # noqa: BLE001
-            pass
+        from drift.gui.state import get_live_price
+        live_price = get_live_price(symbol)
 
         watch_levels: list[dict] = []
         try:

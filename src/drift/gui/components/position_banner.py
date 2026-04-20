@@ -56,7 +56,7 @@ def _time_display(pos) -> str:
         return ""
 
 
-@st.fragment(run_every=15)
+@st.fragment(run_every=10)
 def render_position_banner() -> None:
     """Render pending approvals + open positions at the top of every page."""
     config = get_config()
@@ -163,9 +163,9 @@ def _render_position_card(config, pos) -> None:
     # P&L (filled only)
     pnl_html = ""
     if pos.entry_fill:
-        try:
-            from drift.data.providers.yfinance_provider import YFinanceProvider
-            current_price = YFinanceProvider().get_latest_quote(pos.symbol)
+        from drift.gui.state import get_live_price
+        current_price = get_live_price(pos.symbol)
+        if current_price is not None:
             pts = (current_price - pos.entry_fill) if pos.bias == "LONG" else (pos.entry_fill - current_price)
             usd = pts * 0.50 * pos.quantity
             clr = "#52b788" if pts >= 0 else "#e05252"
@@ -173,8 +173,6 @@ def _render_position_card(config, pos) -> None:
                 f" &ensp; <span style='color:{clr};white-space:nowrap'>"
                 f"{pts:+.2f} pts (${usd:+.2f})</span>"
             )
-        except Exception:  # noqa: BLE001
-            pass
 
     time_md = _time_display(pos)
     time_html = f" <span style='color:#888;font-size:0.85em'>{time_md}</span>" if time_md else ""

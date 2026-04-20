@@ -62,14 +62,13 @@ _pages = [
 def _sidebar_price() -> None:
     from zoneinfo import ZoneInfo
     from datetime import datetime
-    from drift.gui.state import get_config
-    from drift.data.providers.yfinance_provider import YFinanceProvider
+    from drift.gui.state import get_config, get_live_price
 
     config = get_config()
     symbol = config.instrument.symbol
     _ET = ZoneInfo("America/New_York")
-    try:
-        price = YFinanceProvider().get_latest_quote(symbol)
+    price = get_live_price(symbol)
+    if price is not None:
         now_et = datetime.now(tz=_ET)
         st.markdown(
             f"<div style='margin:4px 0 2px 0;line-height:1.1'>"
@@ -80,7 +79,7 @@ def _sidebar_price() -> None:
             f"</div>",
             unsafe_allow_html=True,
         )
-    except Exception:  # noqa: BLE001
+    else:
         st.caption("Price unavailable")
 
 

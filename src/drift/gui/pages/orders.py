@@ -6,7 +6,7 @@ Sections:
     3. **IB Status** — connectivity check.
     4. **Order History** — all past orders with expandable detail.
 
-Auto-refresh uses st.fragment(run_every=15) so only the live sections
+Auto-refresh uses st.fragment(run_every=10) so only the live sections
 rerun — no full-page reload or scroll-position reset.
 """
 from __future__ import annotations
@@ -24,9 +24,9 @@ log = logging.getLogger(__name__)
 # Auto-refreshing live sections (fragment = WebSocket rerun, no page reload)
 # ---------------------------------------------------------------------------
 
-@st.fragment(run_every=15)
+@st.fragment(run_every=10)
 def _positions_section(config, db_path: str) -> None:
-    """Active positions — reruns every 15 s to update P&L without a page reload."""
+    """Active positions — reruns every 10 s to update P&L without a page reload."""
     from drift.storage.trade_store import TradeStore
 
     store = TradeStore(db_path)
@@ -40,9 +40,9 @@ def _positions_section(config, db_path: str) -> None:
     st.divider()
 
 
-@st.fragment(run_every=15)
+@st.fragment(run_every=10)
 def _pending_section(config, db_path: str) -> None:
-    """Pending approvals — reruns every 15 s so expiry is checked live."""
+    """Pending approvals — reruns every 10 s so expiry is checked live."""
     from drift.storage.trade_store import TradeStore
 
     store = TradeStore(db_path)
@@ -122,15 +122,12 @@ def _submit_order(config, order_row) -> None:
         return
 
     # Price validity warning (non-blocking)
-    try:
-        from drift.data.providers.yfinance_provider import YFinanceProvider
-        provider = YFinanceProvider()
-        current_price = provider.get_latest_quote(order_row.symbol)
+    from drift.gui.state import get_live_price
+    current_price = get_live_price(order_row.symbol)
+    if current_price is not None:
         warnings = mgr.check_price_validity(order_row, current_price)
         for w in warnings:
             st.warning(w, icon="⚠️")
-    except Exception:  # noqa: BLE001
-        pass
 
     with st.spinner("Connecting to IB Gateway and placing bracket order…"):
         result = mgr.approve_and_place(order_row)
@@ -455,9 +452,9 @@ def _render_active_position(config, pos) -> None:
     # P&L (filled only)
     pnl_html = ""
     if pos.entry_fill:
-        try:
-            from drift.data.providers.yfinance_provider import YFinanceProvider
-            current = YFinanceProvider().get_latest_quote(pos.symbol)
+        from drift.gui.state import get_live_price
+        current = get_live_price(pos.symbol)
+        if current is not None:
             pts = (current - pos.entry_fill) if pos.bias == "LONG" else (pos.entry_fill - current)
             usd = pts * 0.50 * pos.quantity
             clr = "#52b788" if pts >= 0 else "#e05252"
@@ -465,8 +462,6 @@ def _render_active_position(config, pos) -> None:
                 f" &ensp; <span style='color:{clr};white-space:nowrap'>"
                 f"{pts:+.2f} pts (${usd:+.2f})</span>"
             )
-        except Exception:  # noqa: BLE001
-            pass
 
     # Time display
     time_str = ""

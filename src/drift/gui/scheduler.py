@@ -133,7 +133,7 @@ class BackgroundScheduler:
         self._watch_thread.start()
         self._expiry_thread = threading.Thread(
             target=self._position_expiry_loop,
-            name="drift-position-expiry",
+            name="drift-position-monitor",
             daemon=True,
         )
         self._expiry_thread.start()
@@ -421,6 +421,8 @@ class BackgroundScheduler:
             self._last_watch_was_trade_plan = (outcome == "TRADE_PLAN_ISSUED")
 
         # Poll active IB positions for fill/exit detection
+        # (also runs in the position-monitor thread; having it here too
+        #  keeps latency low when the watch loop fires frequently)
         self._poll_positions(config)
 
     def _poll_positions(self, config) -> None:
@@ -471,19 +473,31 @@ class BackgroundScheduler:
         self._run_cycle(trigger="post_close")
 
     # ------------------------------------------------------------------
-    # Position expiry daemon (HOLD_EXPIRY auto-close)
+    # Position monitor daemon (IB poll + fill timeouts + hold expiry)
     # ------------------------------------------------------------------
 
+    _POSITION_POLL_INTERVAL = 15  # seconds between IB position checks
+
     def _position_expiry_loop(self) -> None:
-        """Poll every 60 s; handle fill timeouts and thesis window expiry."""
-        time.sleep(30)  # startup delay — let the process settle
+        """Poll every 15 s; detect fills/exits, handle fill timeouts, hold expiry.
+
+        This is the single thread responsible for all IB position lifecycle
+        transitions.  It runs at the same cadence as the UI position banner
+        (15 s) so state changes appear promptly in the GUI.
+        """
+        time.sleep(15)  # startup delay — let the process settle
         while True:
             try:
+                from drift.utils.config import load_app_config
+                config = load_app_config(self._config_path)
+                # 1. Poll IB for fills and exits (SL/TP hits)
+                self._poll_positions(config)
+                # 2. Check fill timeouts and thesis window expiry
                 self._handle_fill_timeouts()
                 self._close_expired_positions()
             except Exception as exc:  # noqa: BLE001
-                log.warning("Position expiry check error: %s", exc)
-            time.sleep(60)
+                log.warning("Position monitor error: %s", exc)
+            time.sleep(self._POSITION_POLL_INTERVAL)
 
     def _handle_fill_timeouts(self) -> None:
         """Auto-trigger Assess for WORKING orders that exceed fill_timeout_minutes.
