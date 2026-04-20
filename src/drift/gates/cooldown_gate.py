@@ -19,14 +19,14 @@ _COOLDOWN_OUTCOMES = _TRADE_OUTCOMES | _NO_TRADE_OUTCOMES
 class CooldownGate(Gate):
     """Blocks a new cycle if a recent LLM call was made.
 
-    Reads the JSONL event log and scans for the most recent event whose
-    ``final_outcome`` was either ``TRADE_PLAN_ISSUED`` or ``LLM_NO_TRADE``.
+    For **TRADE_PLAN_ISSUED** events: if a ``db_path`` is provided, the gate
+    checks whether the trade is still active (WORKING/FILLED).  If the trade
+    has been closed/cancelled, the cooldown clears immediately — no need to
+    wait for the full timer.  When no DB path is available (replay mode), it
+    falls back to the timestamp-based JSONL approach.
 
-    * After a **TRADE_PLAN_ISSUED**, the cooldown window is the trade plan's
-      ``max_hold_minutes`` (falling back to ``risk.cooldown_minutes``).
-    * After an **LLM_NO_TRADE**, the cooldown is ``risk.no_trade_cooldown_minutes``
-      (default 15 min) — prevents repeated LLM calls when gates pass but the
-      LLM sees nothing actionable.
+    For **LLM_NO_TRADE** events: cooldown is ``risk.no_trade_cooldown_minutes``
+    measured from the event timestamp.
 
     Gate-blocked events (``final_outcome == "BLOCKED"``) do not count — only
     outcomes that reached the LLM advance the cooldown timer.
@@ -41,6 +41,7 @@ class CooldownGate(Gate):
         gates_config: GatesSection,
         risk_config: RiskSection,
         log_path: str | Path,
+        db_path: str | Path | None = None,
     ) -> None:
         self._gates = gates_config
         self._cooldown_minutes = risk_config.cooldown_minutes
@@ -48,6 +49,7 @@ class CooldownGate(Gate):
             risk_config, "no_trade_cooldown_minutes", risk_config.cooldown_minutes,
         )
         self._log_path = Path(log_path)
+        self._db_path = db_path
 
     def evaluate(self, snapshot: MarketSnapshot) -> GateResult:  # noqa: ARG002
         if not self._gates.cooldown_enabled:
@@ -64,6 +66,14 @@ class CooldownGate(Gate):
                 reason="Cooldown periods are 0 minutes.",
             )
 
+        # ---- Trade-based cooldown (preferred when DB available) ----
+        # If there's an active trade in the DB, block new cycles.
+        if self._db_path is not None:
+            active_result = self._check_active_trade()
+            if active_result is not None:
+                return active_result
+
+        # ---- JSONL-based cooldown (NO_TRADE events + fallback for trades) ----
         last_signal_time, cooldown_minutes = self._get_last_signal()
 
         if last_signal_time is None:
@@ -103,6 +113,28 @@ class CooldownGate(Gate):
         if not self._gates.cooldown_enabled or self._cooldown_minutes == 0:
             return None
 
+        # Check active trade first (DB-based)
+        if self._db_path is not None:
+            try:
+                from drift.storage.trade_store import TradeStore
+                store = TradeStore(self._db_path)
+                active = store.get_active()
+                store.close()
+                if active:
+                    pos = active[0]
+                    anchor_str = pos.thesis_anchor or pos.generated_at
+                    if anchor_str:
+                        anchor_dt = datetime.fromisoformat(anchor_str)
+                        if anchor_dt.tzinfo is None:
+                            anchor_dt = anchor_dt.replace(tzinfo=timezone.utc)
+                        remaining = pos.max_hold_minutes * 60 - (
+                            datetime.now(tz=timezone.utc) - anchor_dt
+                        ).total_seconds()
+                        return remaining if remaining > 0 else None
+            except Exception:  # noqa: BLE001
+                pass
+
+        # JSONL fallback
         last_time, hold_minutes = self._get_last_signal()
         if last_time is None:
             return None
@@ -115,17 +147,70 @@ class CooldownGate(Gate):
     # Helpers
     # ------------------------------------------------------------------
 
+    def _check_active_trade(self) -> GateResult | None:
+        """If an active trade exists, block the cycle.  Returns None if no active trade."""
+        try:
+            from drift.storage.trade_store import TradeStore
+            store = TradeStore(self._db_path)
+            active = store.get_active()
+            store.close()
+        except Exception:  # noqa: BLE001
+            return None
+
+        if not active:
+            return None
+
+        pos = active[0]
+        anchor_str = pos.thesis_anchor or pos.generated_at
+        if anchor_str:
+            try:
+                anchor_dt = datetime.fromisoformat(anchor_str)
+                if anchor_dt.tzinfo is None:
+                    anchor_dt = anchor_dt.replace(tzinfo=timezone.utc)
+                elapsed = (datetime.now(tz=timezone.utc) - anchor_dt).total_seconds() / 60
+                remaining = round(pos.max_hold_minutes - elapsed, 1)
+                if remaining > 0:
+                    return GateResult(
+                        gate_name=self.name,
+                        passed=False,
+                        reason=(
+                            f"Active {pos.state} trade #{pos.id} — "
+                            f"{remaining} min remaining in thesis window "
+                            f"({pos.max_hold_minutes} min)."
+                        ),
+                    )
+            except (ValueError, TypeError):
+                pass
+
+        # Active trade but can't compute remaining time — still block
+        return GateResult(
+            gate_name=self.name,
+            passed=False,
+            reason=f"Active {pos.state} trade #{pos.id} — cooldown active.",
+        )
+
     def _get_last_signal(self) -> tuple[datetime | None, int]:
         """Scan the JSONL log for the most recent LLM-reaching cycle.
 
         Returns ``(timestamp, cooldown_minutes)``.
 
-        For ``TRADE_PLAN_ISSUED`` events, ``cooldown_minutes`` is drawn from
-        ``trade_plan.max_hold_minutes`` (falls back to ``risk.cooldown_minutes``).
+        When ``db_path`` is set, only ``LLM_NO_TRADE`` events are considered
+        here — ``TRADE_PLAN_ISSUED`` cooldowns are handled by
+        ``_check_active_trade`` which reads the trade database directly.
+
         For ``LLM_NO_TRADE`` events, it uses ``risk.no_trade_cooldown_minutes``.
+        For ``TRADE_PLAN_ISSUED`` (no-DB fallback), cooldown uses
+        ``trade_plan.max_hold_minutes`` (falls back to ``risk.cooldown_minutes``).
         """
         if not self._log_path.exists():
             return None, self._cooldown_minutes
+
+        # When DB is available, only look at NO_TRADE events in the JSONL
+        # (TRADE_PLAN cooldowns are handled by _check_active_trade)
+        outcomes_to_check = (
+            _NO_TRADE_OUTCOMES if self._db_path is not None
+            else _COOLDOWN_OUTCOMES
+        )
 
         last_time: datetime | None = None
         last_cooldown: int = self._cooldown_minutes
@@ -144,7 +229,7 @@ class CooldownGate(Gate):
                 continue
 
             outcome = event.get("final_outcome")
-            if outcome not in _COOLDOWN_OUTCOMES:
+            if outcome not in outcomes_to_check:
                 continue
 
             try:

@@ -92,6 +92,7 @@ class RiskSection(BaseModel):
     max_signals_per_day: int = Field(gt=0)
     cooldown_minutes: int = Field(ge=0)
     no_trade_cooldown_minutes: int = Field(default=15, ge=0)
+    fill_timeout_minutes: int = Field(default=5, ge=1, le=60)
     max_stop_points: float = Field(gt=0)
     min_stop_points: float = Field(gt=0)
     atr_stop_floor_mult: float = Field(gt=0)

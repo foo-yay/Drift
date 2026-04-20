@@ -37,6 +37,7 @@ risk:
   max_signals_per_day: 3
   cooldown_minutes: 15
   no_trade_cooldown_minutes: 15
+  fill_timeout_minutes: 5
   max_stop_points: 40.0
   min_stop_points: 6.0
   atr_stop_floor_mult: 0.8
