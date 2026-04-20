@@ -269,6 +269,5 @@ def _run_cycle(config) -> None:
     st.session_state["_ctrl_outcome"]     = outcome
     st.session_state["_ctrl_error"]       = error_msg
     st.session_state["_ctrl_show_output"] = True
-    st.cache_resource.clear()
     st.rerun()
 

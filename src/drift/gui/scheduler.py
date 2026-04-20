@@ -41,6 +41,7 @@ class _SchedulerState:
 
     def __init__(self) -> None:
         self.last_run_utc: datetime | None = None
+        self.last_scheduled_run_utc: datetime | None = None
         self.next_run_utc: datetime | None = None
         self.last_outcome: str = ""          # "success" | "error" | ""
         self.last_error: str = ""
@@ -54,6 +55,7 @@ class _SchedulerState:
         with self._lock:
             return {
                 "last_run_utc":          self.last_run_utc,
+                "last_scheduled_run_utc": self.last_scheduled_run_utc,
                 "next_run_utc":          self.next_run_utc,
                 "last_outcome":          self.last_outcome,
                 "last_error":            self.last_error,
@@ -155,6 +157,7 @@ class BackgroundScheduler:
         time.sleep(5)
         while True:
             outcome = self._run_cycle(trigger="scheduled")
+            self.state.last_scheduled_run_utc = datetime.now(tz=timezone.utc)
             if outcome == "BLOCKED":
                 self._schedule_cooldown_wakeup()
             else:

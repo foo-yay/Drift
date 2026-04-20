@@ -453,12 +453,12 @@ def _render_status_countdown(config, store, scheduler=None) -> None:
             )
             return
 
-        # Prefer the scheduler's own last-run time so Run Now doesn't reset
-        # the loop timer.  Fall back to the DB only if the scheduler thread
-        # hasn't completed a cycle yet this session.
+        # Prefer the scheduler's own last *scheduled* run time so Run Now
+        # and watch-triggered cycles don't reset the loop timer.  Fall back
+        # to the DB only if the scheduler thread hasn't completed a cycle yet.
         last_ts: datetime | None = None
         if scheduler is not None:
-            last_ts = scheduler.state.last_run_utc  # None until first scheduled cycle
+            last_ts = scheduler.state.last_scheduled_run_utc  # None until first scheduled cycle
 
         if last_ts is None:
             # Scheduler hasn't fired yet — fall back to DB so existing history
@@ -591,7 +591,6 @@ def _run_cycle_now(config) -> None:
     st.session_state["_run_outcome"]     = outcome
     st.session_state["_run_error"]       = error_msg
     st.session_state["_show_run_output"] = True
-    st.cache_resource.clear()  # force store to re-open on rerun
     st.rerun()  # re-render page so panel picks up new signal + dialog opens
 
 
