@@ -578,10 +578,10 @@ class IBClient:
     def check_order_status(self, order_id: int) -> dict[str, Any]:
         """Check the current status of an order.
 
-        Uses explicit ``reqAllOpenOrders()`` and ``reqCompletedOrders()``
-        instead of relying on the session-local caches (``openOrders()`` /
-        ``trades()``), which are empty on a fresh readonly connection because
-        ib_insync skips auto-subscribe when ``readonly=True``.
+        Uses ``reqAllOpenOrders()`` for working/submitted orders and
+        ``reqExecutions()`` for fills.  ``reqCompletedOrders()`` is NOT used
+        because IB zeroes out ``orderId`` on completed-order records, making
+        them unmatchable.
 
         Returns:
             {"status": "ok", "order_status": "Filled"|"Submitted"|..., "avg_fill_price": float|None}
@@ -598,9 +598,7 @@ class IBClient:
             return {"status": "error", "message": str(exc)}
 
         try:
-            # Explicitly request all open orders across all client IDs.
-            # readonly=True skips reqAutoOpenOrders, so the local caches
-            # (openOrders / trades) are empty on a fresh connection.
+            # 1. Check open orders — covers Working / Submitted / PreSubmitted
             open_trades = ib.reqAllOpenOrders()
             for t in open_trades:
                 if t.order.orderId == order_id:
@@ -613,14 +611,15 @@ class IBClient:
                         }
                     return {"status": "ok", "order_status": status, "avg_fill_price": None}
 
-            # Not in open orders — check completed (filled/cancelled)
-            completed = ib.reqCompletedOrders(apiOnly=True)
-            for t in completed:
-                if t.order.orderId == order_id:
+            # 2. Check execution reports — covers fills (orderId is preserved)
+            from ib_insync import ExecutionFilter
+            executions = ib.reqExecutions(ExecutionFilter())
+            for fill in executions:
+                if fill.execution.orderId == order_id:
                     return {
                         "status": "ok",
-                        "order_status": t.orderStatus.status,
-                        "avg_fill_price": t.orderStatus.avgFillPrice or None,
+                        "order_status": "Filled",
+                        "avg_fill_price": fill.execution.price,
                     }
 
             return {"status": "ok", "order_status": "Unknown", "avg_fill_price": None}
