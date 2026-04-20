@@ -381,10 +381,7 @@ def build_candlestick_chart(
             )
 
     # -- Layout ---------------------------------------------------------
-    last_close = bars[-1].close if bars else None
     title = f"{bars[0].symbol if bars else '—'}   {timeframe}"
-    if last_close:
-        title += f"   {last_close:,.2f}"
 
     fig.update_layout(
         title=dict(text=title, font=dict(size=15)),
