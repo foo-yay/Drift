@@ -149,12 +149,11 @@ class TradePlanBuilder:
         chase_warn = f"above {chase_level:.2f}" if direction == "LONG" else f"below {chase_level:.2f}"
 
         return [
-            f"Open Robinhood → tap the search bar → type 'MNQ' → select 'MNQ1! Micro E-Mini Nasdaq'.",
-            f"Tap [{action}] and set order type to 'Limit'.",
-            f"Wait for price to {price_dir} the entry zone: {entry_low:.2f} – {entry_high:.2f}.",
-            f"If price is already {chase_warn} before you get in — skip this trade, do not chase.",
-            f"Set your limit price anywhere inside {entry_low:.2f} – {entry_high:.2f} and submit for 1 contract.",
-            f"Immediately after fill: set a Stop Loss order at {stop_loss:.2f}.",
-            f"Set a Take Profit (limit) order at {tp1:.2f}.",
-            f"Time stop: if neither target nor stop is hit within {decision.hold_minutes} min, tap [{close_action}] to close manually.",
+            f"① ENTRY — Place a {action} LIMIT order at any price inside {entry_low:.2f} – {entry_high:.2f} · Qty: 1 contract · Time in force: Day.",
+            f"   Do NOT use Market order. If price is already {chase_warn} before you submit — cancel and skip this trade.",
+            f"② STOP LOSS — Immediately after your entry fills: place a {close_action} STOP order at {stop_loss:.2f} · Qty: 1 · Time in force: GTC.",
+            f"   (Robinhood: tap the position → {close_action} → Order type: Stop → Stop price: {stop_loss:.2f})",
+            f"③ TAKE PROFIT — Place a {close_action} LIMIT order at {tp1:.2f} · Qty: 1 · Time in force: GTC.",
+            f"   (Robinhood: tap the position → {close_action} → Order type: Limit → Limit price: {tp1:.2f})",
+            f"④ TIME STOP — If neither order fills within {decision.hold_minutes} min: cancel both open orders, then place a {close_action} MARKET order to close.",
         ]
