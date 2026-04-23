@@ -173,7 +173,7 @@ def _fire_real_bracket(config, bias: str) -> dict:
         take_profit_1=tp1,
     )
 
-    result = IBClient(config.broker).submit_bracket(fake_order)
+    result = IBClient(config.broker, config.instrument).submit_bracket(fake_order)
     if result["status"] != "ok":
         result["_prices"] = dict(current=current, entry=entry, sl=sl, tp1=tp1, tp2=tp2)
         return result

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from typing import Any
 
 from ib_insync import Contract, LimitOrder, Order, StopOrder
 
@@ -45,6 +46,26 @@ def mnq_contract() -> Contract:
         currency="USD",
         lastTradeDateOrContractMonth=_front_month_expiry(),
     )
+
+
+def build_contract(instrument: Any) -> Contract:
+    """Build an IB Contract from an InstrumentSection.
+
+    Returns a futures Contract for asset_class="futures" or a Stock contract
+    for asset_class="equity".  The caller must still call qualifyContracts()
+    before placing orders — this just creates the unqualified descriptor.
+    """
+    from ib_insync import Stock  # local import — keeps module importable without ib_insync
+
+    if instrument.asset_class == "futures":
+        return Contract(
+            symbol=instrument.symbol,
+            secType="FUT",
+            exchange=instrument.exchange,
+            currency=instrument.currency,
+            lastTradeDateOrContractMonth=_front_month_expiry(),
+        )
+    return Stock(instrument.symbol, instrument.exchange, instrument.currency)
 
 
 def build_bracket(

@@ -94,3 +94,23 @@ def get_live_price(symbol: str) -> float | None:
     with _price_lock:
         _price_cache[symbol] = (price, time.monotonic())
     return price
+
+
+# ---------------------------------------------------------------------------
+# Instrument helpers
+# ---------------------------------------------------------------------------
+
+def get_tick_value(symbol: str, config) -> float:
+    """Return the tick_value ($ per point per contract/share) for *symbol*.
+
+    Checks the active instrument first, then searches watched_instruments.
+    Returns 0.50 as a legacy fallback for unregistered symbols so existing
+    MNQ P&L calculations continue to work without config changes.
+    """
+    sym = symbol.upper()
+    if config.instrument.symbol.upper() == sym:
+        return config.instrument.tick_value
+    for inst in (getattr(config, "watched_instruments", None) or []):
+        if inst.symbol.upper() == sym:
+            return inst.tick_value
+    return 0.50  # legacy fallback
