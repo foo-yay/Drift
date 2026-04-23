@@ -22,6 +22,14 @@ class InstrumentSection(BaseModel):
     symbol: str = Field(min_length=1)
     allow_long: bool
     allow_short: bool
+    asset_class: Literal["futures", "equity"] = "futures"
+    tick_value: float = Field(default=0.50, gt=0)
+    """Dollar value per point per contract/share (e.g. 0.50 for MNQ, 1.0 for equities)."""
+    yfinance_symbol: str | None = None
+    """Override ticker for yfinance lookups (e.g. 'NQ=F' for MNQ). Defaults to symbol."""
+    exchange: str = "CME"
+    """IB routing exchange (e.g. 'CME' for futures, 'SMART' for equities)."""
+    currency: str = "USD"
 
     @model_validator(mode="after")
     def validate_direction_flags(self) -> "InstrumentSection":
@@ -163,6 +171,8 @@ class BrokerSection(BaseModel):
 class AppConfig(BaseModel):
     app: AppSection
     instrument: InstrumentSection
+    watched_instruments: list[InstrumentSection] = Field(default_factory=list)
+    """Instruments available for switching in the GUI. The active one is applied via active_instrument.json."""
     sessions: SessionsSection
     lookbacks: LookbackSection
     features: FeaturesSection

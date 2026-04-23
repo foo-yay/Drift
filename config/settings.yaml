@@ -9,6 +9,37 @@ instrument:
   symbol: MNQ
   allow_long: true
   allow_short: true
+  asset_class: futures
+  tick_value: 0.50        # $0.50 per point per MNQ contract
+  yfinance_symbol: "NQ=F" # Yahoo Finance ticker
+  exchange: CME
+  currency: USD
+
+watched_instruments:
+  - symbol: MNQ
+    allow_long: true
+    allow_short: true
+    asset_class: futures
+    tick_value: 0.50
+    yfinance_symbol: "NQ=F"
+    exchange: CME
+    currency: USD
+  - symbol: SPY
+    allow_long: true
+    allow_short: false
+    asset_class: equity
+    tick_value: 1.00      # $1 per point per share
+    yfinance_symbol: "SPY"
+    exchange: SMART
+    currency: USD
+  - symbol: QQQ
+    allow_long: true
+    allow_short: false
+    asset_class: equity
+    tick_value: 1.00
+    yfinance_symbol: "QQQ"
+    exchange: SMART
+    currency: USD
 
 sessions:
   enabled: true
