@@ -28,6 +28,19 @@ class PositionManager:
         self._cfg = config
         self._trades = TradeStore(db_path)
 
+    def _instrument_for_pos(self, pos) -> Any:
+        """Return the InstrumentSection matching pos.symbol, falling back to active instrument.
+
+        Used to pass the correct contract to IBClient so that order placement
+        and modification target the right instrument even when the active
+        instrument has been switched by the operator.
+        """
+        sym = (getattr(pos, "symbol", None) or "").upper()
+        for inst in (getattr(self._cfg, "watched_instruments", None) or []):
+            if inst.symbol.upper() == sym:
+                return inst
+        return getattr(self._cfg, "instrument", None)
+
     # ------------------------------------------------------------------
     # Approval-time validation
     # ------------------------------------------------------------------
@@ -87,7 +100,7 @@ class PositionManager:
 
         # Place bracket via IB
         self._trades.set_state(trade.id, "APPROVED")
-        client = IBClient(self._cfg.broker)
+        client = IBClient(self._cfg.broker, self._instrument_for_pos(trade))
 
         result = client.submit_bracket(trade)
         if result["status"] != "ok":
@@ -141,7 +154,7 @@ class PositionManager:
         if new_mode == pos.exit_mode:
             return {"status": "ok", "message": "Already in this mode."}
 
-        client = IBClient(self._cfg.broker)
+        client = IBClient(self._cfg.broker, self._instrument_for_pos(pos))
 
         if new_mode == "TP1":
             if not pos.take_profit_1:
@@ -226,7 +239,7 @@ class PositionManager:
             log.info("Trade %d (%s) closed locally — no IB interaction", position_id, pos.source)
             return {"status": "ok"}
 
-        client = IBClient(self._cfg.broker)
+        client = IBClient(self._cfg.broker, self._instrument_for_pos(pos))
 
         if pos.state == "WORKING":
             if pos.parent_order_id:
@@ -271,7 +284,7 @@ class PositionManager:
         if not active_trades:
             return changes
 
-        client = IBClient(self._cfg.broker)
+        client = IBClient(self._cfg.broker, self._cfg.instrument)
 
         for pos in active_trades:
             if pos.state == "WORKING" and pos.parent_order_id:
@@ -366,7 +379,7 @@ class PositionManager:
             return self.manual_close(position_id)
 
         changes: list[str] = []
-        client = IBClient(self._cfg.broker)
+        client = IBClient(self._cfg.broker, self._instrument_for_pos(pos))
 
         # ---- Stop loss ----
         if rec.new_stop_loss is not None and rec.new_stop_loss != pos.stop_loss:

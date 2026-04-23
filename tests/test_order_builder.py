@@ -10,7 +10,48 @@ try:
 except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
-from drift.brokers.order_builder import build_bracket, mnq_contract
+from drift.brokers.order_builder import build_bracket, build_contract, mnq_contract
+
+
+def test_mnq_contract():
+    c = mnq_contract()
+    assert c.symbol == "MNQ"
+    assert c.secType == "FUT"
+    assert c.exchange == "CME"
+
+
+def test_build_contract_futures():
+    """build_contract returns a FUT Contract for futures instruments."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class _FuturesInstr:
+        symbol: str = "MNQ"
+        asset_class: str = "futures"
+        exchange: str = "CME"
+        currency: str = "USD"
+
+    c = build_contract(_FuturesInstr())
+    assert c.secType == "FUT"
+    assert c.symbol == "MNQ"
+    assert c.exchange == "CME"
+
+
+def test_build_contract_equity():
+    """build_contract returns a Stock (secType STK) for equity instruments."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class _EquityInstr:
+        symbol: str = "SPY"
+        asset_class: str = "equity"
+        exchange: str = "SMART"
+        currency: str = "USD"
+
+    c = build_contract(_EquityInstr())
+    assert c.secType == "STK"
+    assert c.symbol == "SPY"
+    assert c.exchange == "SMART"
 
 
 def test_mnq_contract():

@@ -342,7 +342,7 @@ def page() -> None:
     with st.expander("🔌 IB Gateway Status", expanded=False):
         if st.button("Test Connection"):
             from drift.brokers.ib_client import IBClient
-            client = IBClient(config.broker)
+            client = IBClient(config.broker, config.instrument)
             with st.spinner("Testing…"):
                 result = client.check_connectivity()
             if result["status"] == "ok":
@@ -452,11 +452,11 @@ def _render_active_position(config, pos) -> None:
     # P&L (filled only)
     pnl_html = ""
     if pos.entry_fill:
-        from drift.gui.state import get_live_price
+        from drift.gui.state import get_live_price, get_tick_value
         current = get_live_price(pos.symbol)
         if current is not None:
             pts = (current - pos.entry_fill) if pos.bias == "LONG" else (pos.entry_fill - current)
-            usd = pts * 0.50 * pos.quantity
+            usd = pts * get_tick_value(pos.symbol, config) * pos.quantity
             clr = "#52b788" if pts >= 0 else "#e05252"
             pnl_html = (
                 f" &ensp; <span style='color:{clr};white-space:nowrap'>"
@@ -562,7 +562,8 @@ def _render_trade_history_row(trade) -> None:
     pnl_md = ""
     if trade.entry_fill and trade.exit_price:
         pts = (trade.exit_price - trade.entry_fill) if trade.bias == "LONG" else (trade.entry_fill - trade.exit_price)
-        usd = pts * 0.50 * trade.quantity
+        from drift.gui.state import get_tick_value
+        usd = pts * get_tick_value(trade.symbol, config) * trade.quantity
         clr = "#52b788" if pts >= 0 else "#e05252"
         pnl_md = f"<span style='color:{clr};white-space:nowrap'>{pts:+.2f} pts (${usd:+.2f})</span>"
 

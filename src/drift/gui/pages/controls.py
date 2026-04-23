@@ -36,6 +36,80 @@ def page() -> None:
     sandbox_path = _ROOT / "data" / ".sandbox"
 
     # ------------------------------------------------------------------
+    # Active Instrument
+    # ------------------------------------------------------------------
+    st.subheader("Active Instrument")
+    st.caption(
+        "Switch the instrument being analyzed and traded. "
+        "Takes effect immediately — the scheduler restarts and uses the new instrument on its next cycle."
+    )
+
+    _active_json = _ROOT / "config" / "active_instrument.json"
+
+    def _read_active_symbol(fallback: str) -> str:
+        try:
+            import json
+            data = json.loads(_active_json.read_text(encoding="utf-8"))
+            return data.get("symbol", fallback)
+        except Exception:  # noqa: BLE001
+            return fallback
+
+    instruments = config.watched_instruments or []
+    if not instruments:
+        st.caption(
+            f"Active: **{config.instrument.symbol}** "
+            "— add `watched_instruments` to settings.yaml to enable switching"
+        )
+    else:
+        symbols = [i.symbol for i in instruments]
+        active_sym = _read_active_symbol(config.instrument.symbol)
+
+        col_sel, col_btn = st.columns([3, 1])
+        with col_sel:
+            chosen = st.selectbox(
+                "Instrument",
+                options=symbols,
+                index=symbols.index(active_sym) if active_sym in symbols else 0,
+                label_visibility="collapsed",
+                key="instrument_select",
+            )
+        with col_btn:
+            changed = chosen != active_sym
+            if st.button("Apply", key="instr_apply", type="primary", disabled=not changed):
+                import json
+
+                _active_json.parent.mkdir(parents=True, exist_ok=True)
+                _active_json.write_text(
+                    json.dumps({"symbol": chosen}), encoding="utf-8"
+                )
+                # Clear cached config so the controls page reflects the change.
+                _load_config.clear()
+                # Restart background scheduler so it picks up the new instrument.
+                try:
+                    from drift.gui.scheduler import restart_scheduler
+                    restart_scheduler()
+                except Exception:  # noqa: BLE001
+                    pass
+                st.success(
+                    f"Switched to **{chosen}**. Scheduler restarting — next cycle will use the new instrument.",
+                    icon="✅",
+                )
+                st.rerun()
+
+        # Show details of the active instrument profile.
+        active_profile = next((i for i in instruments if i.symbol == active_sym), None)
+        if active_profile:
+            st.caption(
+                f"{active_profile.asset_class.capitalize()} · "
+                f"tick={active_profile.tick_value:.2f} · "
+                f"exchange={active_profile.exchange} · "
+                f"long={'✅' if active_profile.allow_long else '❌'} "
+                f"short={'✅' if active_profile.allow_short else '❌'}"
+            )
+
+    st.divider()
+
+    # ------------------------------------------------------------------
     # Kill Switch
     # ------------------------------------------------------------------
     st.subheader("Kill Switch")

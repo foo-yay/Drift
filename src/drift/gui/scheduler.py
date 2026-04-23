@@ -129,6 +129,7 @@ class BackgroundScheduler:
             name="drift-scheduler",
             daemon=True,         # dies automatically when the process exits
         )
+        self._stop_event = threading.Event()  # set to request graceful shutdown
         self._thread.start()
         self._watch_thread = threading.Thread(
             target=self._watch_loop,
@@ -154,6 +155,10 @@ class BackgroundScheduler:
     def is_alive(self) -> bool:
         return self._thread.is_alive()
 
+    def stop(self) -> None:
+        """Signal all daemon threads to exit at their next sleep checkpoint."""
+        self._stop_event.set()
+
     # ------------------------------------------------------------------
     # Internal loop (daemon thread)
     # ------------------------------------------------------------------
@@ -161,8 +166,9 @@ class BackgroundScheduler:
     def _loop(self) -> None:
         """Run first cycle after a short startup delay, then loop on interval."""
         # Short delay so the process finishes starting up before the first cycle.
-        time.sleep(5)
-        while True:
+        if self._stop_event.wait(timeout=5):
+            return
+        while not self._stop_event.is_set():
             outcome = self._run_cycle(trigger="scheduled")
             self.state.last_scheduled_run_utc = datetime.now(tz=timezone.utc)
             if outcome == "BLOCKED":
@@ -171,7 +177,7 @@ class BackgroundScheduler:
                 self._cancel_cooldown_timer()
             next_run = datetime.now(tz=timezone.utc) + timedelta(seconds=self._interval)
             self.state.next_run_utc = next_run
-            time.sleep(self._interval)
+            self._stop_event.wait(timeout=self._interval)
 
     def _run_cycle(self, trigger: str = "scheduled") -> str:
         from drift.app import DriftApplication
@@ -308,13 +314,14 @@ class BackgroundScheduler:
 
     def _watch_loop(self) -> None:
         """Poll active watches every 30 seconds; fire a cycle when one triggers."""
-        time.sleep(10)  # short startup delay — let the first scheduled cycle run first
-        while True:
+        if self._stop_event.wait(timeout=10):  # short startup delay
+            return
+        while not self._stop_event.is_set():
             try:
                 self._check_watches()
             except Exception as exc:  # noqa: BLE001
                 log.warning("Watch poller error: %s", exc)
-            time.sleep(_WATCH_POLL_INTERVAL)
+            self._stop_event.wait(timeout=_WATCH_POLL_INTERVAL)
 
     def _check_watches(self) -> None:
         """Evaluate active watch conditions and active trade plan levels; trigger a cycle if any fires."""
@@ -524,8 +531,9 @@ class BackgroundScheduler:
         transitions.  It runs at the same cadence as the UI position banner
         (15 s) so state changes appear promptly in the GUI.
         """
-        time.sleep(15)  # startup delay — let the process settle
-        while True:
+        if self._stop_event.wait(timeout=15):  # startup delay
+            return
+        while not self._stop_event.is_set():
             try:
                 from drift.utils.config import load_app_config
                 config = load_app_config(self._config_path)
@@ -536,7 +544,7 @@ class BackgroundScheduler:
                 self._close_expired_positions()
             except Exception as exc:  # noqa: BLE001
                 log.warning("Position monitor error: %s", exc)
-            time.sleep(self._POSITION_POLL_INTERVAL)
+            self._stop_event.wait(timeout=self._POSITION_POLL_INTERVAL)
 
     def _handle_fill_timeouts(self) -> None:
         """Auto-trigger Assess for WORKING orders that exceed fill_timeout_minutes.
@@ -872,3 +880,26 @@ def ensure_scheduler_running() -> BackgroundScheduler:
     interval = config.app.loop_interval_seconds
 
     return _get_scheduler(abs_config_path, interval)
+
+
+def restart_scheduler() -> BackgroundScheduler:
+    """Stop the current scheduler and start a fresh one.
+
+    Called from the controls page when the operator switches the active
+    instrument.  The old daemon threads are signalled to exit at their next
+    sleep checkpoint; the Streamlit cache is cleared so the next call to
+    ``ensure_scheduler_running()`` creates a new ``BackgroundScheduler``
+    instance that picks up the latest ``active_instrument.json`` override.
+    """
+    # Signal current instance to stop (if one exists).
+    try:
+        current = ensure_scheduler_running()
+        current.stop()
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Drop the cached instance so the next call builds a fresh one.
+    _get_scheduler.clear()
+
+    # Create and return the new scheduler instance.
+    return ensure_scheduler_running()
