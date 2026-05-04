@@ -365,7 +365,7 @@ def page() -> None:
         st.caption("No completed trades yet.")
     else:
         for trade in history:
-            _render_trade_history_row(trade)
+            _render_trade_history_row(config, trade)
 
 
 # ------------------------------------------------------------------
@@ -549,7 +549,7 @@ def _render_active_position(config, pos) -> None:
         _show_stored_assessment(config, pos)
 
 
-def _render_trade_history_row(trade) -> None:
+def _render_trade_history_row(config, trade) -> None:
     """Render a single trade history card — works for all terminal states."""
     icon, _ = _STATE_BADGE.get(trade.state, ("❓", "grey"))
     bias_emoji = _BIAS_EMOJI.get(trade.bias, "")
