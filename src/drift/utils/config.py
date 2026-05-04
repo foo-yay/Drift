@@ -86,6 +86,16 @@ def _apply_active_instrument_override(config: AppConfig, config_dir: Path) -> No
         (inst for inst in config.watched_instruments if inst.symbol.upper() == target_symbol),
         None,
     )
+
+    # Not in watched_instruments — try building InstrumentSection from the full
+    # JSON payload (written when the operator enters a custom symbol).
+    if match is None and len(data) > 1:
+        from drift.config.models import InstrumentSection
+        try:
+            match = InstrumentSection.model_validate(data)
+        except Exception:  # noqa: BLE001
+            pass
+
     if match is not None:
         object.__setattr__(config, "instrument", match)
 

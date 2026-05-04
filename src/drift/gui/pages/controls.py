@@ -41,7 +41,7 @@ def page() -> None:
     st.subheader("Active Instrument")
     st.caption(
         "Switch the instrument being analyzed and traded. "
-        "Takes effect immediately — the scheduler restarts and uses the new instrument on its next cycle."
+        "Takes effect on the next scheduler cycle."
     )
 
     _active_json = _ROOT / "config" / "active_instrument.json"
@@ -50,67 +50,90 @@ def page() -> None:
         try:
             import json
             data = json.loads(_active_json.read_text(encoding="utf-8"))
-            return data.get("symbol", fallback)
+            return (data.get("symbol") or fallback).strip().upper()
         except Exception:  # noqa: BLE001
             return fallback
 
+    def _write_and_apply(profile_data: dict) -> None:
+        import json
+        _active_json.parent.mkdir(parents=True, exist_ok=True)
+        _active_json.write_text(json.dumps(profile_data), encoding="utf-8")
+        _load_config.clear()
+        try:
+            from drift.gui.scheduler import restart_scheduler
+            restart_scheduler()
+        except Exception:  # noqa: BLE001
+            pass
+
     instruments = config.watched_instruments or []
-    if not instruments:
-        st.caption(
-            f"Active: **{config.instrument.symbol}** "
-            "— add `watched_instruments` to settings.yaml to enable switching"
-        )
-    else:
-        symbols = [i.symbol for i in instruments]
-        active_sym = _read_active_symbol(config.instrument.symbol)
-        active_profile = next((i for i in instruments if i.symbol == active_sym), None)
+    active_sym = _read_active_symbol(config.instrument.symbol)
 
-        # ── Active indicator ─────────────────────────────────────────
-        if active_profile:
-            badge_color = "#4caf50" if active_profile.asset_class == "futures" else "#2196f3"
-            st.markdown(
-                f"<p style='margin-bottom:6px;font-size:0.9rem'>"
-                f"Active: <span style='background:{badge_color};color:#fff;"
-                f"padding:2px 8px;border-radius:4px;font-weight:600'>"
-                f"{active_sym}</span>"
-                f" &nbsp;·&nbsp; {active_profile.asset_class.capitalize()}"
-                f" &nbsp;·&nbsp; tick&nbsp;${active_profile.tick_value:.2f}"
-                f" &nbsp;·&nbsp; {active_profile.exchange}"
-                f" &nbsp;·&nbsp; long {'✅' if active_profile.allow_long else '❌'}"
-                f" &nbsp;short {'✅' if active_profile.allow_short else '❌'}"
-                f"</p>",
-                unsafe_allow_html=True,
-            )
+    # ── Active badge ─────────────────────────────────────────────────
+    # Always read from config.instrument (reflects current override).
+    inst = config.instrument
+    badge_color = "#4caf50" if inst.asset_class == "futures" else "#2196f3"
+    st.markdown(
+        f"<p style='margin-bottom:8px;font-size:0.9rem'>"
+        f"Active: <span style='background:{badge_color};color:#fff;"
+        f"padding:2px 8px;border-radius:4px;font-weight:600'>{inst.symbol}</span>"
+        f"&nbsp;·&nbsp;{inst.asset_class.capitalize()}"
+        f"&nbsp;·&nbsp;tick&nbsp;${inst.tick_value:.2f}"
+        f"&nbsp;·&nbsp;{inst.exchange}"
+        f"&nbsp;·&nbsp;long {'✅' if inst.allow_long else '❌'}"
+        f"&nbsp;short {'✅' if inst.allow_short else '❌'}"
+        f"</p>",
+        unsafe_allow_html=True,
+    )
 
-        # ── Selector ─────────────────────────────────────────────────
-        col_sel, col_btn = st.columns([3, 1])
-        with col_sel:
-            chosen = st.selectbox(
-                "Switch to",
-                options=symbols,
-                index=symbols.index(active_sym) if active_sym in symbols else 0,
-                key="instrument_select",
-            )
-        with col_btn:
-            st.write("")  # vertical alignment nudge
-            if st.button("Apply", key="instr_apply", type="primary", disabled=(chosen == active_sym)):
-                import json
+    # ── Quick-select buttons for predefined instruments ───────────────
+    if instruments:
+        st.caption("Predefined:")
+        btn_cols = st.columns(min(len(instruments), 6))
+        for i, watched in enumerate(instruments):
+            with btn_cols[i]:
+                is_active = watched.symbol.upper() == active_sym
+                if st.button(
+                    watched.symbol,
+                    key=f"quick_instr_{watched.symbol}",
+                    type="primary" if is_active else "secondary",
+                    disabled=is_active,
+                ):
+                    _write_and_apply(watched.model_dump())
+                    st.toast(f"Switched to **{watched.symbol}**", icon="✅")
+                    st.rerun()
 
-                _active_json.parent.mkdir(parents=True, exist_ok=True)
-                _active_json.write_text(
-                    json.dumps({"symbol": chosen}), encoding="utf-8"
-                )
-                # Clear cached config so the controls page reflects the change.
-                _load_config.clear()
-                # Restart background scheduler so it picks up the new instrument.
-                try:
-                    from drift.gui.scheduler import restart_scheduler
-                    restart_scheduler()
-                except Exception:  # noqa: BLE001
-                    pass
-                # st.toast persists across st.rerun() — st.success() would be lost
-                st.toast(f"Switched to **{chosen}** — scheduler restarted.", icon="✅")
-                st.rerun()
+    # ── Custom symbol entry ───────────────────────────────────────────
+    st.caption("Or enter any symbol (equities default to SMART routing, tick $1.00):")
+    col_inp, col_btn = st.columns([3, 1])
+    with col_inp:
+        custom_sym = st.text_input(
+            "Custom symbol",
+            placeholder="NVDA, MSFT, AAPL, ES=F…",
+            label_visibility="collapsed",
+            key="instr_custom_input",
+        ).strip().upper()
+    with col_btn:
+        st.write("")  # vertical alignment nudge
+        apply_disabled = not custom_sym or custom_sym == active_sym
+        if st.button("Apply", key="instr_apply_custom", type="primary", disabled=apply_disabled):
+            # Use watched profile if available, else build equity default.
+            profile = next((w for w in instruments if w.symbol.upper() == custom_sym), None)
+            if profile is not None:
+                profile_data = profile.model_dump()
+            else:
+                profile_data = {
+                    "symbol": custom_sym,
+                    "asset_class": "equity",
+                    "tick_value": 1.00,
+                    "yfinance_symbol": custom_sym,
+                    "exchange": "SMART",
+                    "currency": "USD",
+                    "allow_long": True,
+                    "allow_short": False,
+                }
+            _write_and_apply(profile_data)
+            st.toast(f"Switched to **{custom_sym}**", icon="✅")
+            st.rerun()
 
     st.divider()
 

@@ -77,6 +77,36 @@ def test_active_instrument_override_unknown_symbol_is_ignored(tmp_path) -> None:
     assert config.instrument.symbol == "MNQ"  # unchanged
 
 
+def test_active_instrument_override_custom_full_profile(tmp_path) -> None:
+    """A full profile in active_instrument.json constructs an InstrumentSection
+    for symbols not listed in watched_instruments (e.g. NVDA)."""
+    import shutil
+
+    src = Path("config/settings.yaml")
+    tmp_cfg = tmp_path / "settings.yaml"
+    shutil.copy(src, tmp_cfg)
+
+    nvda_profile = {
+        "symbol": "NVDA",
+        "asset_class": "equity",
+        "tick_value": 1.0,
+        "yfinance_symbol": "NVDA",
+        "exchange": "SMART",
+        "currency": "USD",
+        "allow_long": True,
+        "allow_short": False,
+    }
+    (tmp_path / "active_instrument.json").write_text(
+        json.dumps(nvda_profile), encoding="utf-8"
+    )
+
+    config = load_app_config(tmp_cfg)
+    assert config.instrument.symbol == "NVDA"
+    assert config.instrument.asset_class == "equity"
+    assert config.instrument.exchange == "SMART"
+    assert config.instrument.tick_value == 1.0
+
+
 def test_missing_config_raises() -> None:
     with pytest.raises(FileNotFoundError):
         load_app_config(Path("config/does-not-exist.yaml"))
