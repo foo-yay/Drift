@@ -307,4 +307,5 @@ class TestStateModule:
     def test_get_config_loads_without_error(self) -> None:
         from drift.gui.state import get_config
         config = get_config()
-        assert config.instrument.symbol == "MNQ"
+        assert isinstance(config.instrument.symbol, str)
+        assert len(config.instrument.symbol) > 0

@@ -58,7 +58,9 @@ def page() -> None:
         import json
         _active_json.parent.mkdir(parents=True, exist_ok=True)
         _active_json.write_text(json.dumps(profile_data), encoding="utf-8")
-        _load_config.clear()
+        # Clear ALL page-level @st.cache_resource caches so every page
+        # (live_monitor, orders, signal_history, etc.) reloads fresh config.
+        st.cache_resource.clear()
         try:
             from drift.gui.scheduler import restart_scheduler
             restart_scheduler()

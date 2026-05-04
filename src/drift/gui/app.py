@@ -75,7 +75,7 @@ def _sidebar_price() -> None:
             f"<span style='font-size:1.6rem;font-weight:700;color:#f5f5f5'>"
             f"{price:,.2f}</span>"
             f"<span style='color:#777;font-size:0.75rem;margin-left:8px'>"
-            f"MNQ · {now_et.strftime('%H:%M:%S')} ET</span>"
+            f"{symbol} · {now_et.strftime('%H:%M:%S')} ET</span>"
             f"</div>",
             unsafe_allow_html=True,
         )

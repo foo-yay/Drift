@@ -7,8 +7,12 @@ from drift.config.models import AppConfig, InstrumentSection
 from drift.utils.config import load_app_config
 
 
-def test_load_default_config() -> None:
-    config = load_app_config("config/settings.yaml")
+def test_load_default_config(tmp_path) -> None:
+    import shutil
+    tmp_cfg = tmp_path / "settings.yaml"
+    shutil.copy(Path("config/settings.yaml"), tmp_cfg)
+    # No active_instrument.json in tmp_path → pure defaults are loaded.
+    config = load_app_config(tmp_cfg)
 
     assert isinstance(config, AppConfig)
     assert config.app.name == "Drift"
@@ -16,8 +20,11 @@ def test_load_default_config() -> None:
     assert config.instrument.symbol == "MNQ"
 
 
-def test_instrument_section_new_fields() -> None:
-    config = load_app_config("config/settings.yaml")
+def test_instrument_section_new_fields(tmp_path) -> None:
+    import shutil
+    tmp_cfg = tmp_path / "settings.yaml"
+    shutil.copy(Path("config/settings.yaml"), tmp_cfg)
+    config = load_app_config(tmp_cfg)
     inst = config.instrument
 
     assert inst.asset_class == "futures"
