@@ -47,8 +47,9 @@ def _ensure_event_loop() -> None:
 class IBClient:
     """Thin wrapper around ib_insync for connect-on-demand order management."""
 
-    def __init__(self, config: Any) -> None:  # config: BrokerSection
+    def __init__(self, config: Any, instrument_config: Any = None) -> None:  # config: BrokerSection
         self._cfg = config
+        self._instrument = instrument_config  # InstrumentSection | None
 
     # ------------------------------------------------------------------
     # Connection helpers
@@ -60,7 +61,7 @@ class IBClient:
         from ib_insync import IB
 
         from drift.brokers.gateway_launcher import ensure_gateway_running
-        from drift.brokers.order_builder import mnq_contract
+        from drift.brokers.order_builder import build_contract, mnq_contract
 
         ensure_gateway_running(self._cfg)
 
@@ -76,20 +77,59 @@ class IBClient:
             timeout=self._cfg.order_timeout_seconds,
             readonly=False,
         )
-        contract = mnq_contract()
-        candidates = ib.qualifyContracts(contract)
-        if not candidates:
-            ib.disconnect()
-            raise RuntimeError("Could not qualify MNQ contract with IB.")
-        # Pick front-month: sort by lastTradeDateOrContractMonth ascending
-        from datetime import date
-        def _expiry(c) -> str:
-            return c.lastTradeDateOrContractMonth or "99999999"
-        candidates_sorted = sorted(candidates, key=_expiry)
-        front_month = candidates_sorted[0]
-        log.info("Resolved MNQ contract: %s (expiry %s)", front_month.localSymbol,
-                 front_month.lastTradeDateOrContractMonth)
-        return ib, front_month
+
+        if self._instrument is not None:
+            contract = build_contract(self._instrument)
+            if self._instrument.asset_class == "futures":
+                # Qualify futures to resolve front-month expiry.
+                candidates = ib.qualifyContracts(contract)
+                if not candidates:
+                    ib.disconnect()
+                    raise RuntimeError(
+                        f"Could not qualify {self._instrument.symbol} contract with IB."
+                    )
+                def _expiry(c) -> str:
+                    return c.lastTradeDateOrContractMonth or "99999999"
+                front_month = sorted(candidates, key=_expiry)[0]
+                log.info(
+                    "Resolved %s contract: %s (expiry %s)",
+                    self._instrument.symbol,
+                    front_month.localSymbol,
+                    front_month.lastTradeDateOrContractMonth,
+                )
+                return ib, front_month
+            else:
+                # Equity — qualify to obtain conId.
+                qualified = ib.qualifyContracts(contract)
+                if not qualified:
+                    ib.disconnect()
+                    raise RuntimeError(
+                        f"Could not qualify {self._instrument.symbol} contract with IB."
+                    )
+                log.info(
+                    "Resolved %s equity contract (conId=%s)",
+                    self._instrument.symbol,
+                    qualified[0].conId,
+                )
+                return ib, qualified[0]
+        else:
+            # Legacy fallback — resolve MNQ front-month.
+            contract = mnq_contract()
+            candidates = ib.qualifyContracts(contract)
+            if not candidates:
+                ib.disconnect()
+                raise RuntimeError("Could not qualify MNQ contract with IB.")
+            from datetime import date  # noqa: F811 — date already imported at top of module
+            def _expiry(c) -> str:
+                return c.lastTradeDateOrContractMonth or "99999999"
+            candidates_sorted = sorted(candidates, key=_expiry)
+            front_month = candidates_sorted[0]
+            log.info(
+                "Resolved MNQ contract: %s (expiry %s)",
+                front_month.localSymbol,
+                front_month.lastTradeDateOrContractMonth,
+            )
+            return ib, front_month
 
     # ------------------------------------------------------------------
     # Pre-flight connectivity check

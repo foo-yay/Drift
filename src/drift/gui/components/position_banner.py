@@ -163,11 +163,11 @@ def _render_position_card(config, pos) -> None:
     # P&L (filled only)
     pnl_html = ""
     if pos.entry_fill:
-        from drift.gui.state import get_live_price
+        from drift.gui.state import get_live_price, get_tick_value
         current_price = get_live_price(pos.symbol)
         if current_price is not None:
             pts = (current_price - pos.entry_fill) if pos.bias == "LONG" else (pos.entry_fill - current_price)
-            usd = pts * 0.50 * pos.quantity
+            usd = pts * get_tick_value(pos.symbol, config) * pos.quantity
             clr = "#52b788" if pts >= 0 else "#e05252"
             pnl_html = (
                 f" &ensp; <span style='color:{clr};white-space:nowrap'>"

@@ -46,5 +46,56 @@ def load_app_config(config_path: str | Path) -> AppConfig:
     with path.open("r", encoding="utf-8") as file_handle:
         payload = yaml.safe_load(file_handle) or {}
 
-    return AppConfig.model_validate(payload)
+    config = AppConfig.model_validate(payload)
+
+    # Apply active_instrument.json override — allows the GUI controls page to
+    # switch instruments without editing settings.yaml.
+    _apply_active_instrument_override(config, path.parent)
+
+    return config
+
+
+def _apply_active_instrument_override(config: AppConfig, config_dir: Path) -> None:
+    """If config_dir/active_instrument.json exists and names a watched instrument,
+    replace config.instrument in-place with that instrument's profile.
+
+    Modifies the config object in-place via __dict__ to bypass Pydantic's frozen
+    model protection (AppConfig is not frozen, so direct attribute assignment works).
+    """
+    import json
+
+    override_path = config_dir / "active_instrument.json"
+    if not override_path.exists():
+        return
+
+    try:
+        data = json.loads(override_path.read_text(encoding="utf-8"))
+        target_symbol = (data.get("symbol") or "").strip().upper()
+    except Exception:  # noqa: BLE001
+        return
+
+    if not target_symbol:
+        return
+
+    # If it matches the default instrument, nothing to do.
+    if config.instrument.symbol.upper() == target_symbol:
+        return
+
+    # Search watched_instruments for a matching profile.
+    match = next(
+        (inst for inst in config.watched_instruments if inst.symbol.upper() == target_symbol),
+        None,
+    )
+
+    # Not in watched_instruments — try building InstrumentSection from the full
+    # JSON payload (written when the operator enters a custom symbol).
+    if match is None and len(data) > 1:
+        from drift.config.models import InstrumentSection
+        try:
+            match = InstrumentSection.model_validate(data)
+        except Exception:  # noqa: BLE001
+            pass
+
+    if match is not None:
+        object.__setattr__(config, "instrument", match)
 

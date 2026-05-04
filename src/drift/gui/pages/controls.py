@@ -36,6 +36,110 @@ def page() -> None:
     sandbox_path = _ROOT / "data" / ".sandbox"
 
     # ------------------------------------------------------------------
+    # Active Instrument
+    # ------------------------------------------------------------------
+    st.subheader("Active Instrument")
+    st.caption(
+        "Switch the instrument being analyzed and traded. "
+        "Takes effect on the next scheduler cycle."
+    )
+
+    _active_json = _ROOT / "config" / "active_instrument.json"
+
+    def _read_active_symbol(fallback: str) -> str:
+        try:
+            import json
+            data = json.loads(_active_json.read_text(encoding="utf-8"))
+            return (data.get("symbol") or fallback).strip().upper()
+        except Exception:  # noqa: BLE001
+            return fallback
+
+    def _write_and_apply(profile_data: dict) -> None:
+        import json
+        _active_json.parent.mkdir(parents=True, exist_ok=True)
+        _active_json.write_text(json.dumps(profile_data), encoding="utf-8")
+        # Clear ALL page-level @st.cache_resource caches so every page
+        # (live_monitor, orders, signal_history, etc.) reloads fresh config.
+        st.cache_resource.clear()
+        try:
+            from drift.gui.scheduler import restart_scheduler
+            restart_scheduler()
+        except Exception:  # noqa: BLE001
+            pass
+
+    instruments = config.watched_instruments or []
+    active_sym = _read_active_symbol(config.instrument.symbol)
+
+    # ── Active badge ─────────────────────────────────────────────────
+    # Always read from config.instrument (reflects current override).
+    inst = config.instrument
+    badge_color = "#4caf50" if inst.asset_class == "futures" else "#2196f3"
+    st.markdown(
+        f"<p style='margin-bottom:8px;font-size:0.9rem'>"
+        f"Active: <span style='background:{badge_color};color:#fff;"
+        f"padding:2px 8px;border-radius:4px;font-weight:600'>{inst.symbol}</span>"
+        f"&nbsp;·&nbsp;{inst.asset_class.capitalize()}"
+        f"&nbsp;·&nbsp;tick&nbsp;${inst.tick_value:.2f}"
+        f"&nbsp;·&nbsp;{inst.exchange}"
+        f"&nbsp;·&nbsp;long {'✅' if inst.allow_long else '❌'}"
+        f"&nbsp;short {'✅' if inst.allow_short else '❌'}"
+        f"</p>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Quick-select buttons for predefined instruments ───────────────
+    if instruments:
+        st.caption("Predefined:")
+        btn_cols = st.columns(min(len(instruments), 6))
+        for i, watched in enumerate(instruments):
+            with btn_cols[i]:
+                is_active = watched.symbol.upper() == active_sym
+                if st.button(
+                    watched.symbol,
+                    key=f"quick_instr_{watched.symbol}",
+                    type="primary" if is_active else "secondary",
+                    disabled=is_active,
+                ):
+                    _write_and_apply(watched.model_dump())
+                    st.toast(f"Switched to **{watched.symbol}**", icon="✅")
+                    st.rerun()
+
+    # ── Custom symbol entry ───────────────────────────────────────────
+    st.caption("Or enter any symbol (equities default to SMART routing, tick $1.00):")
+    col_inp, col_btn = st.columns([3, 1])
+    with col_inp:
+        custom_sym = st.text_input(
+            "Custom symbol",
+            placeholder="NVDA, MSFT, AAPL, ES=F…",
+            label_visibility="collapsed",
+            key="instr_custom_input",
+        ).strip().upper()
+    with col_btn:
+        st.write("")  # vertical alignment nudge
+        apply_disabled = not custom_sym or custom_sym == active_sym
+        if st.button("Apply", key="instr_apply_custom", type="primary", disabled=apply_disabled):
+            # Use watched profile if available, else build equity default.
+            profile = next((w for w in instruments if w.symbol.upper() == custom_sym), None)
+            if profile is not None:
+                profile_data = profile.model_dump()
+            else:
+                profile_data = {
+                    "symbol": custom_sym,
+                    "asset_class": "equity",
+                    "tick_value": 1.00,
+                    "yfinance_symbol": custom_sym,
+                    "exchange": "SMART",
+                    "currency": "USD",
+                    "allow_long": True,
+                    "allow_short": False,
+                }
+            _write_and_apply(profile_data)
+            st.toast(f"Switched to **{custom_sym}**", icon="✅")
+            st.rerun()
+
+    st.divider()
+
+    # ------------------------------------------------------------------
     # Kill Switch
     # ------------------------------------------------------------------
     st.subheader("Kill Switch")
