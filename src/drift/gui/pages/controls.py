@@ -63,19 +63,37 @@ def page() -> None:
     else:
         symbols = [i.symbol for i in instruments]
         active_sym = _read_active_symbol(config.instrument.symbol)
+        active_profile = next((i for i in instruments if i.symbol == active_sym), None)
 
+        # ── Active indicator ─────────────────────────────────────────
+        if active_profile:
+            badge_color = "#4caf50" if active_profile.asset_class == "futures" else "#2196f3"
+            st.markdown(
+                f"<p style='margin-bottom:6px;font-size:0.9rem'>"
+                f"Active: <span style='background:{badge_color};color:#fff;"
+                f"padding:2px 8px;border-radius:4px;font-weight:600'>"
+                f"{active_sym}</span>"
+                f" &nbsp;·&nbsp; {active_profile.asset_class.capitalize()}"
+                f" &nbsp;·&nbsp; tick&nbsp;${active_profile.tick_value:.2f}"
+                f" &nbsp;·&nbsp; {active_profile.exchange}"
+                f" &nbsp;·&nbsp; long {'✅' if active_profile.allow_long else '❌'}"
+                f" &nbsp;short {'✅' if active_profile.allow_short else '❌'}"
+                f"</p>",
+                unsafe_allow_html=True,
+            )
+
+        # ── Selector ─────────────────────────────────────────────────
         col_sel, col_btn = st.columns([3, 1])
         with col_sel:
             chosen = st.selectbox(
-                "Instrument",
+                "Switch to",
                 options=symbols,
                 index=symbols.index(active_sym) if active_sym in symbols else 0,
-                label_visibility="collapsed",
                 key="instrument_select",
             )
         with col_btn:
-            changed = chosen != active_sym
-            if st.button("Apply", key="instr_apply", type="primary", disabled=not changed):
+            st.write("")  # vertical alignment nudge
+            if st.button("Apply", key="instr_apply", type="primary", disabled=(chosen == active_sym)):
                 import json
 
                 _active_json.parent.mkdir(parents=True, exist_ok=True)
@@ -90,22 +108,9 @@ def page() -> None:
                     restart_scheduler()
                 except Exception:  # noqa: BLE001
                     pass
-                st.success(
-                    f"Switched to **{chosen}**. Scheduler restarting — next cycle will use the new instrument.",
-                    icon="✅",
-                )
+                # st.toast persists across st.rerun() — st.success() would be lost
+                st.toast(f"Switched to **{chosen}** — scheduler restarted.", icon="✅")
                 st.rerun()
-
-        # Show details of the active instrument profile.
-        active_profile = next((i for i in instruments if i.symbol == active_sym), None)
-        if active_profile:
-            st.caption(
-                f"{active_profile.asset_class.capitalize()} · "
-                f"tick={active_profile.tick_value:.2f} · "
-                f"exchange={active_profile.exchange} · "
-                f"long={'✅' if active_profile.allow_long else '❌'} "
-                f"short={'✅' if active_profile.allow_short else '❌'}"
-            )
 
     st.divider()
 
