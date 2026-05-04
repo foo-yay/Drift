@@ -80,6 +80,30 @@ def ensure_gateway_running(broker_cfg: Any) -> None:
         log.info("Making %s executable.", script_path)
         script_path.chmod(script_path.stat().st_mode | 0o755)
 
+    # Make every .sh in the IBC directory executable so nested helper
+    # scripts (e.g. displaybannerandlaunch.sh) are not blocked with
+    # exit code 126 ("found but not executable").
+    ibc_dir = script_path.parent
+    for sh in ibc_dir.rglob("*.sh"):
+        try:
+            sh.chmod(sh.stat().st_mode | 0o755)
+        except OSError:
+            pass  # best-effort; don't abort launch over a chmod failure
+
+    # On macOS, files downloaded from the internet carry a quarantine
+    # extended attribute that prevents execution even with correct perms.
+    # Strip it from the entire IBC tree if the xattr command is available.
+    if os.uname().sysname == "Darwin":
+        try:
+            subprocess.run(
+                ["xattr", "-r", "-d", "com.apple.quarantine", str(ibc_dir)],
+                check=False,
+                capture_output=True,
+            )
+            log.debug("Cleared quarantine xattr on IBC directory: %s", ibc_dir)
+        except FileNotFoundError:
+            pass  # xattr not present — skip silently
+
     log.info("IB Gateway not running — launching IBC: %s", script_path)
 
     log_dir = script_path.parent / "logs"
