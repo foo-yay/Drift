@@ -178,6 +178,72 @@ class DriftApplication:
         # ------------------------------------------------------------------
 
         # ------------------------------------------------------------------
+        # Deterministic strategy scanner (bypasses LLM on clean setups)
+        # ------------------------------------------------------------------
+        if self.config.liquidity_sweep.enabled:
+            from drift.strategy import sweep_scanner
+            setup = sweep_scanner.scan(bars_5m, self.config)
+            if setup.decision in ("LONG", "SHORT"):
+                render_status(
+                    f"deterministic scanner: {setup.decision} — {setup.setup_type} "
+                    f"(conf={setup.confidence}, RR={setup.reward_risk_ratio})"
+                )
+                plan = self._build_plan_from_setup(setup, snapshot)
+                if plan is not None:
+                    render_trade_plan(plan)
+                    event = SignalEvent(
+                        event_time=datetime.now(tz=timezone.utc),
+                        symbol=symbol,
+                        source=self._source,
+                        trigger=self._trigger,
+                        snapshot=snapshot.model_dump(mode="json"),
+                        llm_decision_raw=None,
+                        llm_decision_parsed=None,
+                        pre_gate_report=gate_report.model_dump(mode="json"),
+                        trade_plan=plan.model_dump(mode="json"),
+                        final_outcome="TRADE_PLAN_ISSUED",
+                        final_reason=(
+                            f"{plan.bias} | {plan.setup_type} | confidence={plan.confidence} "
+                            "(deterministic scanner — LLM skipped)"
+                        ),
+                    )
+                    self.event_logger.append_event(event)
+                    render_success(
+                        f"deterministic trade plan logged to {self.config.storage.jsonl_event_log}"
+                    )
+                    if self._trade_store is not None and not self._sandbox:
+                        signal_key = event.compute_signal_key()
+                        self._trade_store.create(
+                            signal_key=signal_key,
+                            symbol=plan.symbol,
+                            bias=plan.bias,
+                            setup_type=plan.setup_type,
+                            entry_min=plan.entry_min,
+                            entry_max=plan.entry_max,
+                            stop_loss=plan.stop_loss,
+                            take_profit_1=plan.take_profit_1,
+                            take_profit_2=plan.take_profit_2,
+                            thesis=plan.thesis,
+                            confidence=plan.confidence,
+                            max_hold_minutes=plan.max_hold_minutes,
+                            generated_at=plan.generated_at.isoformat(),
+                            source="live",
+                        )
+                        log.info(
+                            "Deterministic trade created for approval (signal_key=%s)", signal_key
+                        )
+                    if self.config.output.desktop_notifications:
+                        notify_signal(plan, approval_required=self.config.broker.enabled)
+                    return "TRADE_PLAN_ISSUED"
+                else:
+                    render_status(
+                        "deterministic scanner signal rejected by plan constraints — "
+                        "falling through to LLM"
+                    )
+            else:
+                log.debug("Deterministic scanner: NO_TRADE — %s", setup.no_trade_reason)
+
+        # ------------------------------------------------------------------
         # LLM adjudication
         # ------------------------------------------------------------------
         render_status("calling LLM...")
@@ -284,6 +350,55 @@ class DriftApplication:
             notify_signal(plan, approval_required=self.config.broker.enabled)
 
         return "TRADE_PLAN_ISSUED"
+
+    def _build_plan_from_setup(self, setup: object, snapshot: MarketSnapshot) -> object | None:
+        """Map a deterministic SetupResult to a TradePlan.
+
+        Returns None if the plan fails the risk constraints defined in config.risk
+        (e.g. min_confidence, min_reward_risk).  This mirrors the guard in
+        TradePlanBuilder.build() so the same operator-facing constraints apply to
+        both paths.
+        """
+        from drift.models import TradePlan
+
+        cfg = self.config.risk
+        if setup.confidence < cfg.min_confidence:
+            log.debug(
+                "Deterministic plan rejected: confidence %d < min %d",
+                setup.confidence, cfg.min_confidence,
+            )
+            return None
+
+        if setup.reward_risk_ratio is None or setup.reward_risk_ratio < cfg.min_reward_risk:
+            log.debug(
+                "Deterministic plan rejected: R:R %.2f < min %.2f",
+                setup.reward_risk_ratio or 0, cfg.min_reward_risk,
+            )
+            return None
+
+        return TradePlan(
+            symbol=self.config.instrument.symbol,
+            bias=setup.decision,
+            setup_type=setup.setup_type,
+            confidence=setup.confidence,
+            entry_min=setup.entry_min,
+            entry_max=setup.entry_max,
+            stop_loss=setup.stop_loss,
+            take_profit_1=setup.take_profit_1,
+            take_profit_2=setup.take_profit_2,
+            reward_risk_ratio=setup.reward_risk_ratio,
+            max_hold_minutes=cfg.max_hold_minutes_default,
+            thesis=setup.thesis,
+            invalidation_conditions=setup.invalidation_conditions,
+            do_not_trade_if=setup.invalidation_conditions,
+            operator_instructions=[
+                f"Entry zone {setup.entry_min:.2f}–{setup.entry_max:.2f}.",
+                f"Stop {setup.stop_loss:.2f}.",
+                f"TP1 {setup.take_profit_1:.2f}"
+                + (f" / TP2 {setup.take_profit_2:.2f}" if setup.take_profit_2 else ""),
+                f"Confirmation: {setup.confirmation_type.replace('_', ' ')}.",
+            ],
+        )
 
     def run_forever(self) -> None:
         while True:

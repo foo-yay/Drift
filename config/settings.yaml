@@ -106,9 +106,26 @@ strategy:
     - opening_range_breakout
     - mean_reversion
     - range_fade
+    - liquidity_sweep
   extension_atr_threshold: 1.2
   chase_buffer_points: 4.0
   structure_buffer_points: 2.0
+
+liquidity_sweep:
+  enabled: true
+  swing_lookback: 3
+  min_sweep_distance: 0.05
+  max_rejection_close_bars: 2
+  max_swing_age_bars: 40
+  max_bars_from_sweep: 20
+  min_fvg_size: 0.05
+  pin_bar_min_wick_ratio: 0.55
+  pin_bar_max_body_ratio: 0.35
+  pin_bar_close_zone_ratio: 0.40
+  stop_buffer: 0.10
+  min_target_distance: 0.10
+  min_reward_risk: 1.8
+  min_bars_required: 15
 
 llm:
   provider: anthropic
