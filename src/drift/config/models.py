@@ -168,6 +168,31 @@ class BrokerSection(BaseModel):
     gateway_script: str = ""  # absolute path to gatewaystartmacos.sh
 
 
+class LiquiditySweepConfig(BaseModel):
+    """Thresholds for the deterministic liquidity sweep strategy scanner."""
+
+    enabled: bool = True
+    swing_lookback: int = Field(default=3, ge=1, description="Bars each side for swing confirmation.")
+    min_sweep_distance: float = Field(default=0.05, ge=0, description="Min pts price must trade beyond the level.")
+    max_rejection_close_bars: int = Field(default=2, ge=1, description="Max bars after spike for rejection close.")
+    max_swing_age_bars: int = Field(default=40, ge=5, description="Max age (in bars) of the swept swing level.")
+    max_bars_from_sweep: int = Field(default=20, ge=1, description="Max bars since sweep before setup is stale.")
+    min_fvg_size: float = Field(default=0.05, ge=0, description="Min gap size for a qualifying FVG.")
+    pin_bar_min_wick_ratio: float = Field(default=0.55, gt=0, le=1, description="Min rejection wick / total range.")
+    pin_bar_max_body_ratio: float = Field(default=0.35, gt=0, le=1, description="Max body / total range.")
+    pin_bar_close_zone_ratio: float = Field(default=0.40, gt=0, le=1, description="Close must be in top/bottom this fraction.")
+    stop_buffer: float = Field(default=0.10, ge=0, description="Extra pts beyond rejection extreme for stop.")
+    min_target_distance: float = Field(default=0.10, ge=0, description="Min pts between entry and target.")
+    min_reward_risk: float = Field(default=1.8, gt=0, description="Minimum R:R to issue a plan.")
+    min_bars_required: int = Field(default=15, ge=5, description="Minimum bars needed to run the scanner.")
+
+    @model_validator(mode="after")
+    def validate_body_wick_ratio(self) -> "LiquiditySweepConfig":
+        if self.pin_bar_max_body_ratio >= self.pin_bar_min_wick_ratio:
+            raise ValueError("pin_bar_max_body_ratio must be less than pin_bar_min_wick_ratio.")
+        return self
+
+
 class AppConfig(BaseModel):
     app: AppSection
     instrument: InstrumentSection
@@ -184,4 +209,5 @@ class AppConfig(BaseModel):
     storage: StorageSection
     output: OutputSection
     broker: BrokerSection = Field(default_factory=BrokerSection)
+    liquidity_sweep: LiquiditySweepConfig = Field(default_factory=LiquiditySweepConfig)
 
