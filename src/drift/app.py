@@ -405,4 +405,105 @@ class DriftApplication:
             self.run_once()
             sleep(self.config.app.loop_interval_seconds)
 
+    def run_sweep_only(self) -> str:
+        """Run a lightweight cycle: fetch data, evaluate gates, run sweep scanner only.
+
+        The LLM is never called.  Used by the dedicated deterministic scan loop
+        which fires every ``liquidity_sweep.scan_interval_seconds`` (default 5 min)
+        so time-sensitive setups are caught within one bar of the confirmation
+        candle closing — not up to 15 minutes later.
+
+        Returns one of: ``"BLOCKED"``, ``"DET_NO_TRADE"``, ``"TRADE_PLAN_ISSUED"``,
+        ``"DET_DISABLED"``, ``"NO_DATA"``.
+        """
+        if not self.config.liquidity_sweep.enabled:
+            return "DET_DISABLED"
+
+        symbol = self.config.instrument.symbol
+
+        # Fetch data
+        try:
+            last_price = self._provider.get_latest_quote(symbol)
+        except ValueError as exc:
+            log.debug("run_sweep_only: data error — %s", exc)
+            return "NO_DATA"
+
+        session = self._provider.get_session_status(symbol)
+        bars_1m = self._provider.get_recent_bars(symbol, "1m", self.config.lookbacks.bars_1m)
+        bars_5m = self._provider.get_recent_bars(symbol, "5m", self.config.lookbacks.bars_5m)
+        bars_1h = self._provider.get_recent_bars(symbol, "1h", self.config.lookbacks.bars_1h)
+
+        # Compute features → snapshot
+        snapshot: MarketSnapshot = self._engine.compute(
+            bars_1m=bars_1m,
+            bars_5m=bars_5m,
+            bars_1h=bars_1h,
+            last_price=last_price,
+            session=session,
+            reference_time=datetime.now(timezone.utc),
+        )
+
+        # Gate layer (same gates as run_once — respect session, cooldown, kill-switch, etc.)
+        gate_report = self._gate_runner.run(snapshot)
+        if not gate_report.all_passed:
+            blocker = next(r for r in gate_report.results if not r.passed)
+            log.debug("run_sweep_only: blocked by %s — %s", blocker.gate_name, blocker.reason)
+            return "BLOCKED"
+
+        # Sweep scanner
+        from drift.strategy import sweep_scanner
+        setup = sweep_scanner.scan(bars_5m, self.config)
+        if setup.decision not in ("LONG", "SHORT"):
+            log.debug("run_sweep_only: NO_TRADE — %s", setup.no_trade_reason)
+            return "DET_NO_TRADE"
+
+        log.info(
+            "run_sweep_only: %s %s (conf=%d, RR=%s)",
+            setup.decision, setup.setup_type, setup.confidence, setup.reward_risk_ratio,
+        )
+        plan = self._build_plan_from_setup(setup, snapshot)
+        if plan is None:
+            log.debug("run_sweep_only: plan rejected by constraints")
+            return "DET_NO_TRADE"
+
+        render_trade_plan(plan)
+        event = SignalEvent(
+            event_time=datetime.now(tz=timezone.utc),
+            symbol=symbol,
+            source=self._source,
+            trigger=self._trigger,
+            snapshot=snapshot.model_dump(mode="json"),
+            llm_decision_raw=None,
+            llm_decision_parsed=None,
+            pre_gate_report=gate_report.model_dump(mode="json"),
+            trade_plan=plan.model_dump(mode="json"),
+            final_outcome="TRADE_PLAN_ISSUED",
+            final_reason=(
+                f"{plan.bias} | {plan.setup_type} | confidence={plan.confidence} "
+                "(deterministic scanner — dedicated 5m cycle)"
+            ),
+        )
+        self.event_logger.append_event(event)
+        if self._trade_store is not None and not self._sandbox:
+            signal_key = event.compute_signal_key()
+            self._trade_store.create(
+                signal_key=signal_key,
+                symbol=plan.symbol,
+                bias=plan.bias,
+                setup_type=plan.setup_type,
+                entry_min=plan.entry_min,
+                entry_max=plan.entry_max,
+                stop_loss=plan.stop_loss,
+                take_profit_1=plan.take_profit_1,
+                take_profit_2=plan.take_profit_2,
+                thesis=plan.thesis,
+                confidence=plan.confidence,
+                max_hold_minutes=plan.max_hold_minutes,
+                generated_at=plan.generated_at.isoformat(),
+                source="live",
+            )
+        if self.config.output.desktop_notifications:
+            notify_signal(plan, approval_required=self.config.broker.enabled)
+        return "TRADE_PLAN_ISSUED"
+
 

@@ -126,6 +126,7 @@ liquidity_sweep:
   min_target_distance: 0.10
   min_reward_risk: 1.8
   min_bars_required: 15
+  scan_interval_seconds: 300   # dedicated det scan every 5m (independent of LLM cadence)
 
 llm:
   provider: anthropic

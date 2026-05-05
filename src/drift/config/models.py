@@ -185,6 +185,12 @@ class LiquiditySweepConfig(BaseModel):
     min_target_distance: float = Field(default=0.10, ge=0, description="Min pts between entry and target.")
     min_reward_risk: float = Field(default=1.8, gt=0, description="Minimum R:R to issue a plan.")
     min_bars_required: int = Field(default=15, ge=5, description="Minimum bars needed to run the scanner.")
+    scan_interval_seconds: int = Field(
+        default=300, ge=60,
+        description="How often (seconds) the deterministic scanner runs its own dedicated cycle. "
+                    "Independent of loop_interval_seconds — the scanner runs at this cadence between "
+                    "full LLM cycles so time-sensitive setups are caught within one 5m bar.",
+    )
 
     @model_validator(mode="after")
     def validate_body_wick_ratio(self) -> "LiquiditySweepConfig":

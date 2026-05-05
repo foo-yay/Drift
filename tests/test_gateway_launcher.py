@@ -72,9 +72,10 @@ def test_launches_script_and_waits_for_port(tmp_path):
 
     with patch("drift.brokers.gateway_launcher._port_open", side_effect=port_states):
         with patch("subprocess.Popen", return_value=mock_proc):
-            with patch("drift.brokers.gateway_launcher.POLL_INTERVAL_SECS", 0):
-                with patch("time.sleep"):
-                    ensure_gateway_running(cfg)
+            with patch("subprocess.run"):
+                with patch("drift.brokers.gateway_launcher.POLL_INTERVAL_SECS", 0):
+                    with patch("time.sleep"):
+                        ensure_gateway_running(cfg)
 
 
 def test_raises_if_process_exits_early(tmp_path):
@@ -94,7 +95,8 @@ def test_raises_if_process_exits_early(tmp_path):
 
     with patch("drift.brokers.gateway_launcher._port_open", return_value=False):
         with patch("subprocess.Popen", return_value=mock_proc):
-            with patch("drift.brokers.gateway_launcher.POLL_INTERVAL_SECS", 0):
-                with patch("time.sleep"):
-                    with pytest.raises(RuntimeError, match="exited"):
-                        ensure_gateway_running(cfg)
+            with patch("subprocess.run"):
+                with patch("drift.brokers.gateway_launcher.POLL_INTERVAL_SECS", 0):
+                    with patch("time.sleep"):
+                        with pytest.raises(RuntimeError, match="exited"):
+                            ensure_gateway_running(cfg)
