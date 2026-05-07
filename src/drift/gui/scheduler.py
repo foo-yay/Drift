@@ -124,6 +124,12 @@ class BackgroundScheduler:
         # running cycle finishes rather than being silently dropped.
         self._pending_post_close_events: list[dict] = []
         self._pending_post_close_lock = threading.Lock()
+        # Serialise main and det cycles so they never overlap (both write to
+        # the same DB and log files).
+        self._cycle_lock = threading.Lock()
+        # UTC timestamp of the last completed main cycle — the det loop skips
+        # firing if a main cycle ran recently (it already ran the scanner).
+        self._last_main_run_utc: datetime | None = None
         self._thread = threading.Thread(
             target=self._loop,
             name="drift-scheduler",
@@ -143,6 +149,14 @@ class BackgroundScheduler:
             daemon=True,
         )
         self._expiry_thread.start()
+        # Dedicated deterministic scanner thread — runs at scan_interval_seconds
+        # (default 5 min) between full LLM cycles to catch time-sensitive setups.
+        self._det_thread = threading.Thread(
+            target=self._det_loop,
+            name="drift-det-scanner",
+            daemon=True,
+        )
+        self._det_thread.start()
         log.info(
             "BackgroundScheduler started — interval=%ds, watch_poll=%ds",
             loop_interval_seconds, _WATCH_POLL_INTERVAL,
@@ -194,9 +208,6 @@ class BackgroundScheduler:
         console_mod.console = capture
         try:
             config = load_app_config(self._config_path)
-            # Absolutize storage paths so the daemon thread always writes to
-            # the same files as the GUI reads, regardless of process CWD.
-            # Mirrors the pattern used by _run_cycle_now() in controls.py.
             root = _PROJECT_ROOT
             abs_storage = config.storage.model_copy(update={
                 "jsonl_event_log":         str(root / config.storage.jsonl_event_log),
@@ -205,8 +216,10 @@ class BackgroundScheduler:
                 "sandbox_sqlite_path":     str(root / config.storage.sandbox_sqlite_path),
             })
             abs_config = config.model_copy(update={"storage": abs_storage})
-            app = DriftApplication(abs_config, config_path=self._config_path, watch_trigger=watch_trigger, trigger=trigger)
-            outcome = app.run_once() or "unknown"
+            with self._cycle_lock:
+                app = DriftApplication(abs_config, config_path=self._config_path, watch_trigger=watch_trigger, trigger=trigger)
+                outcome = app.run_once() or "unknown"
+                self._last_main_run_utc = datetime.now(tz=timezone.utc)
             self.state.record_run(outcome)
             self._drain_pending_post_close()
             return outcome
@@ -214,6 +227,75 @@ class BackgroundScheduler:
             log.exception("Scheduler cycle error: %s", exc)
             self.state.record_run("error", str(exc))
             self._drain_pending_post_close()
+            return "error"
+        finally:
+            console_mod.console = orig
+
+    # ------------------------------------------------------------------
+    # Deterministic scanner loop (separate 5-minute cadence)
+    # ------------------------------------------------------------------
+
+    def _det_loop(self) -> None:
+        """Run the sweep scanner on its own cadence between full LLM cycles.
+
+        Loads scan_interval_seconds from config on every iteration so changes
+        to settings.yaml take effect without restarting the GUI.
+        Skips if a main cycle completed within the last scan_interval seconds
+        (the main cycle already ran the scanner — no need to double-fire).
+        """
+        # Stagger startup so this thread doesn't compete with the main loop's
+        # first cycle (which fires 5 s after process start).
+        if self._stop_event.wait(timeout=15):
+            return
+        while not self._stop_event.is_set():
+            try:
+                from drift.utils.config import load_app_config
+                config = load_app_config(self._config_path)
+                det_interval = config.liquidity_sweep.scan_interval_seconds
+            except Exception:  # noqa: BLE001
+                det_interval = 300
+
+            # Skip if a main cycle ran recently — it already ran the scanner.
+            if self._last_main_run_utc is not None:
+                elapsed = (datetime.now(tz=timezone.utc) - self._last_main_run_utc).total_seconds()
+                if elapsed < det_interval:
+                    self._stop_event.wait(timeout=det_interval - elapsed)
+                    continue
+
+            self._run_det_cycle()
+            self._stop_event.wait(timeout=det_interval)
+
+    def _run_det_cycle(self) -> str:
+        """Run a sweep-scanner-only cycle (no LLM call)."""
+        from drift.app import DriftApplication
+        from drift.gui.state import _PROJECT_ROOT
+        from drift.output import console as console_mod
+        from drift.utils.config import load_app_config
+        from rich.console import Console
+
+        buf = io.StringIO()
+        capture = Console(file=buf, force_terminal=False, no_color=True, width=100)
+        orig = console_mod.console
+        console_mod.console = capture
+        try:
+            config = load_app_config(self._config_path)
+            root = _PROJECT_ROOT
+            abs_storage = config.storage.model_copy(update={
+                "jsonl_event_log":         str(root / config.storage.jsonl_event_log),
+                "sqlite_path":             str(root / config.storage.sqlite_path),
+                "sandbox_jsonl_event_log": str(root / config.storage.sandbox_jsonl_event_log),
+                "sandbox_sqlite_path":     str(root / config.storage.sandbox_sqlite_path),
+            })
+            abs_config = config.model_copy(update={"storage": abs_storage})
+            with self._cycle_lock:
+                app = DriftApplication(abs_config, config_path=self._config_path, trigger="scheduled")
+                outcome = app.run_sweep_only()
+            log.debug("Det scan cycle outcome: %s", outcome)
+            if outcome == "TRADE_PLAN_ISSUED":
+                self._drain_pending_post_close()
+            return outcome
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Det scan cycle error: %s", exc)
             return "error"
         finally:
             console_mod.console = orig
